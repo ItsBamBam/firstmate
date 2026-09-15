@@ -812,7 +812,7 @@ pgrep -P 78848 -a
 
 ```text
   PID  PPID  PGID  ELAPSED STAT COMMAND
-78848     1 78235 04:37:36 S    bash bin/fm-spawn.sh osbambam-pi-skill-frontmatter /Users/brycemajdick/Desktop/OSBAMBAM --mode no-mistakes --yolo off --harness pi --model openai-codex/gpt-5.4-mini --effort low
+78848     1 78235 04:37:36 S    bash bin/fm-spawn.sh <task> <project> --mode no-mistakes --harness pi <task arguments elided>
 78850 78848 78235 04:37:45 S    herdr server --session default
 ```
 
@@ -830,7 +830,7 @@ ps -o pid,command -p "$(ps -o ppid= -p "$pid" | tr -d ' ')"
 ```text
 # deployed helper (before the fix)
 38121 38119 38081 herdr server --session fm-lab-firstmate-finish-38084-30766
-38119 bash /Users/brycemajdick/firstmate/bin/fm-herdr-lab.sh provision fm-lab-firstmate-finish-38084-30766
+38119 bash <firstmate checkout>/bin/fm-herdr-lab.sh provision fm-lab-firstmate-finish-38084-30766
 # fixed helper
 39035     1 39009 herdr server --session fm-lab-fm-fixed-launch-39011-19535
     1 /sbin/launchd

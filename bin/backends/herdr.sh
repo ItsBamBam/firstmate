@@ -1675,11 +1675,10 @@ fm_backend_herdr_projection_order_best_effort() {  # <session> <created-workspac
 # That leaves the server reparented to init with no shell in between, in its
 # own process group (`set -m`), and with no inherited stdin. Backgrounding a
 # shell FUNCTION here instead would fork a copy of the launcher to run it, and
-# that copy would wait on the server for the server's whole lifetime: observed
-# 2026-09-15 as a `bash bin/fm-spawn.sh <task> ...` process alive 4.5h after
-# its task was parked, parent of the fleet's `herdr server --session default`,
-# in the launcher's process group, so the whole fleet's server would have died
-# with that one launch's process group.
+# that copy would wait on the server for the server's whole lifetime with the
+# server in the launcher's process group, so the whole fleet's server would die
+# with that one launch's process group (the observed tree is recorded under
+# "Server launch detachment" in docs/verification/runtime-backends.md).
 fm_backend_herdr_server_ensure() {  # <session>
   local session=$1 running out i client_bin
   running=$(fm_backend_herdr_cli "$session" status --json 2>/dev/null | jq -r '.server.running // false' 2>/dev/null)
