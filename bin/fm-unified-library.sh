@@ -10,8 +10,8 @@
 #
 # Usage:
 #   fm-unified-library.sh recall "<query>"
-#   fm-unified-library.sh search "<issue>" [--limit 3]
-#   fm-unified-library.sh open <CARD-ID> [--budget 4000]
+#   fm-unified-library.sh search "<issue>"
+#   fm-unified-library.sh open <CARD-ID>
 #   fm-unified-library.sh trace <CARD-ID>
 #   fm-unified-library.sh record-outcome <CARD-ID> {worked|failed|mixed|unknown}
 #       [--evidence <text>] [--run-id <id>]
@@ -25,7 +25,8 @@
 #   FM_UNIFIED_LIBRARY_PY  Override path to library.py (tests).
 #   FM_BRAIN_JS            Override path to brain.js (tests).
 #
-# Search never requests more than three cards. The library CLI already orders
+# Search always requests three cards and open always uses a 4000 budget, the
+# contract's fixed lookup surface. The library CLI already orders
 # verified cards first. When a search returns no verified card, the adapter
 # reports that finding instead of inventing one. Draft cards remain prior art,
 # not authority. record-outcome prints the library-owner command for the
@@ -35,8 +36,8 @@
 set -euo pipefail
 
 DEFAULT_OSBAMBAM_ROOT="/Users/brycemajdick/Desktop/OSBAMBAM"
-SEARCH_LIMIT_MAX=3
-OPEN_BUDGET_DEFAULT=4000
+SEARCH_LIMIT=3
+OPEN_BUDGET=4000
 
 die() { printf 'error: %s\n' "$1" >&2; exit 2; }
 
@@ -80,24 +81,6 @@ resolve_brain_js() {
 require_file() {
   local path=$1 label=$2
   [ -f "$path" ] || die "$label not found: $path"
-}
-
-parse_positive_int() {
-  local raw=$1 label=$2
-  case "$raw" in
-    '' | *[!0-9]*) die "$label must be a positive integer" ;;
-  esac
-  [ "$raw" -ge 1 ] || die "$label must be a positive integer"
-  printf '%s\n' "$raw"
-}
-
-cap_int() {
-  local value=$1 max=$2
-  if [ "$value" -gt "$max" ]; then
-    printf '%s\n' "$max"
-  else
-    printf '%s\n' "$value"
-  fi
 }
 
 print_writes() {
@@ -175,15 +158,9 @@ cmd_recall() {
 }
 
 cmd_search() {
-  local query="" limit="$SEARCH_LIMIT_MAX"
+  local query=""
   while [ "$#" -gt 0 ]; do
     case "$1" in
-      --limit)
-        [ -n "${2-}" ] || die "--limit needs a value"
-        limit=$(parse_positive_int "$2" "--limit")
-        limit=$(cap_int "$limit" "$SEARCH_LIMIT_MAX")
-        shift 2
-        ;;
       --help|-h) usage 0 ;;
       --*) die "unknown search option: $1" ;;
       *)
@@ -198,25 +175,20 @@ cmd_search() {
   command -v python3 >/dev/null 2>&1 || die "python3 is required for search"
   local out rc=0
   set +e
-  out=$(python3 "$LIBRARY_PY" search "$query" --limit "$limit")
+  out=$(python3 "$LIBRARY_PY" search "$query" --limit "$SEARCH_LIMIT")
   rc=$?
   set -e
   if [ "$rc" -ne 0 ]; then
     printf '%s\n' "$out"
     exit "$rc"
   fi
-  printf '%s\n' "$out" | annotate_search "$limit"
+  printf '%s\n' "$out" | annotate_search "$SEARCH_LIMIT"
 }
 
 cmd_open() {
-  local identifier="" budget="$OPEN_BUDGET_DEFAULT"
+  local identifier=""
   while [ "$#" -gt 0 ]; do
     case "$1" in
-      --budget)
-        [ -n "${2-}" ] || die "--budget needs a value"
-        budget=$(parse_positive_int "$2" "--budget")
-        shift 2
-        ;;
       --help|-h) usage 0 ;;
       --*) die "unknown open option: $1" ;;
       *)
@@ -228,7 +200,7 @@ cmd_open() {
   done
   [ -n "$identifier" ] || die "open needs a card id"
   require_file "$LIBRARY_PY" "library.py"
-  python3 "$LIBRARY_PY" open "$identifier" --budget "$budget"
+  python3 "$LIBRARY_PY" open "$identifier" --budget "$OPEN_BUDGET"
 }
 
 cmd_trace() {
@@ -291,39 +263,23 @@ cmd_record_outcome() {
   printf 'Record it through the library owner:\n  %s\n' "${rendered% }"
 }
 
-bind_osbambam() {
-  OSBAMBAM_ROOT="$(resolve_osbambam_root)"
-  LIBRARY_PY="$(resolve_library_py)"
-  BRAIN_JS="$(resolve_brain_js)"
-}
-
-bind_osbambam_soft() {
-  if [ -n "${FM_OSBAMBAM_ROOT:-}" ]; then
-    OSBAMBAM_ROOT="$FM_OSBAMBAM_ROOT"
-  elif [ -d "$DEFAULT_OSBAMBAM_ROOT" ]; then
-    OSBAMBAM_ROOT="$DEFAULT_OSBAMBAM_ROOT"
-  else
-    OSBAMBAM_ROOT='<FM_OSBAMBAM_ROOT>'
-  fi
-  LIBRARY_PY="$(resolve_library_py)"
-  BRAIN_JS="$(resolve_brain_js)"
-}
-
-OSBAMBAM_ROOT=
-LIBRARY_PY=
-BRAIN_JS=
-
 [ "$#" -gt 0 ] || usage 2
 case "$1" in
   -h|--help) usage 0 ;;
-  recall) bind_osbambam; shift; cmd_recall "$@" ;;
-  search) bind_osbambam; shift; cmd_search "$@" ;;
-  open) bind_osbambam; shift; cmd_open "$@" ;;
-  trace) bind_osbambam; shift; cmd_trace "$@" ;;
-  record-outcome) bind_osbambam_soft; shift; cmd_record_outcome "$@" ;;
-  writes) bind_osbambam_soft; print_writes ;;
+esac
+
+OSBAMBAM_ROOT="$(resolve_osbambam_root)"
+LIBRARY_PY="$(resolve_library_py)"
+BRAIN_JS="$(resolve_brain_js)"
+
+case "$1" in
+  recall) shift; cmd_recall "$@" ;;
+  search) shift; cmd_search "$@" ;;
+  open) shift; cmd_open "$@" ;;
+  trace) shift; cmd_trace "$@" ;;
+  record-outcome) shift; cmd_record_outcome "$@" ;;
+  writes) print_writes ;;
   *)
-    bind_osbambam_soft
     printf 'error: unknown command: %s\n' "$1" >&2
     print_writes >&2
     exit 2

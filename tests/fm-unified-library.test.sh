@@ -130,14 +130,19 @@ test_search_reports_no_verified_card() {
   pass "search reports no verified relevant card without inventing one"
 }
 
-test_search_caps_limit_at_three() {
-  local out
+test_search_has_no_limit_override() {
+  local out rc
   : >"$CALLS"
-  out=$(run_adapter search "adapter lookup contract" --limit 10)
-  assert_grep "search adapter lookup contract --limit 3" "$CALLS" \
-    "search forwarded a limit above 3"
-  assert_contains "$out" '"limit": 3' "annotated search did not record the capped limit"
-  pass "search never requests more than three cards"
+  set +e
+  out=$(run_adapter search "adapter lookup contract" --limit 10 2>&1)
+  rc=$?
+  set -e
+  expect_code 2 "$rc" "search --limit"
+  assert_contains "$out" "unknown search option: --limit" "search accepted a limit override"
+  [ ! -s "$CALLS" ] || fail "rejected --limit still invoked library.py"
+  out=$(run_adapter search "adapter lookup contract")
+  assert_contains "$out" '"limit": 3' "annotated search did not record the fixed limit"
+  pass "search always requests exactly three cards"
 }
 
 test_search_rejects_unknown_option() {
@@ -169,12 +174,20 @@ test_search_marks_verified_hit() {
 }
 
 test_open_and_trace_passthrough() {
-  local out
+  local out rc
   : >"$CALLS"
   out=$(run_adapter open CARD-DRAFT-1)
   assert_contains "$out" '"identifier": "CARD-DRAFT-1"' "open did not pass the card id"
   assert_grep "open CARD-DRAFT-1 --budget 4000" "$CALLS" \
-    "open did not use the default budget"
+    "open did not use the fixed budget"
+  : >"$CALLS"
+  set +e
+  out=$(run_adapter open CARD-DRAFT-1 --budget 99 2>&1)
+  rc=$?
+  set -e
+  expect_code 2 "$rc" "open --budget"
+  assert_contains "$out" "unknown open option: --budget" "open accepted a budget override"
+  [ ! -s "$CALLS" ] || fail "rejected --budget still invoked library.py"
   : >"$CALLS"
   out=$(run_adapter trace CARD-DRAFT-1)
   assert_contains "$out" '"kind": "card"' "trace did not return provenance"
@@ -244,7 +257,7 @@ test_writes_are_refused() {
 
 test_help_does_not_need_osbambam
 test_search_reports_no_verified_card
-test_search_caps_limit_at_three
+test_search_has_no_limit_override
 test_search_rejects_unknown_option
 test_search_marks_verified_hit
 test_open_and_trace_passthrough
