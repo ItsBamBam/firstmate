@@ -1464,7 +1464,7 @@ test_refusal_reports_a_missing_endpoint_as_needing_reconciliation() {
 
 # A rerun of the same refusal after the first one already stopped the agent
 # reports it as already stopped - endpoint still present - instead of typing
-# another exit command or claiming a fresh stop.
+# another exit command, claiming a fresh stop, or asking no-mistakes anything.
 test_refusal_rerun_reports_an_already_stopped_worker() {
   local case_dir rc pr_head
   case_dir=$(make_case dirty-wt-rerun)
@@ -1479,14 +1479,21 @@ test_refusal_rerun_reports_an_already_stopped_worker() {
   rm -f "$case_dir/tmux.literal"
   : > "$case_dir/tmux.log"
 
+  # The rerun happens with the no-mistakes daemon down: an agent that is
+  # already gone must be reported as such without asking whether a run still
+  # needs it, never as retained and running.
   set +e
-  run_refusal_teardown "$case_dir" "$pr_head"
+  FM_FAKE_AXI_STATUS='error: daemon socket did not accept a connection' FM_FAKE_AXI_STATUS_RC=1 \
+    run_refusal_teardown "$case_dir" "$pr_head"
   rc=$?
   set -e
   expect_code 1 "$rc" "dirty-wt-rerun: the rerun should still refuse the dirty worktree"
   [ ! -e "$case_dir/tmux.literal" ] || fail "dirty-wt-rerun: the rerun typed into an already-stopped worker: $(cat "$case_dir/tmux.literal")"
   if grep -q "Stopped the finished worker" "$case_dir/stderr"; then
     fail "dirty-wt-rerun: the rerun claimed a fresh stop of an already-stopped worker: $(cat "$case_dir/stderr")"
+  fi
+  if grep -q "is retained: no-mistakes could not prove" "$case_dir/stderr"; then
+    fail "dirty-wt-rerun: the rerun reported an already-stopped worker as retained and running: $(cat "$case_dir/stderr")"
   fi
   grep -q "The finished worker at firstmate:fm-task-x1 is already stopped (endpoint state: dead)" "$case_dir/stderr" \
     || fail "dirty-wt-rerun: the rerun did not report the worker as already stopped: $(cat "$case_dir/stderr")"

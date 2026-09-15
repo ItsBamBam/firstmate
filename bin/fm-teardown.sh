@@ -1734,22 +1734,13 @@ refusal_run_needs_worker() {  # <worktree> -> 0 no, 1 yes, 2 cannot tell
 # Nothing of the pre-teardown cleanup sequence runs here: a parked or active
 # run is never aborted (its worker is retained to answer it, and a run whose
 # state cannot be proven counts as needing the worker), and no process rooted
-# in the retained copy is reaped. Every retained outcome says why; a stop is
-# claimed only from the control plane's own verified postcondition.
+# in the retained copy is reaped. The endpoint is read first: an agent already
+# gone is reported as such without consulting no-mistakes, since there is
+# nothing left to stop. Every retained outcome says why; a stop is claimed
+# only from the control plane's own verified postcondition.
 stop_concluded_worker_for_refusal() {
   local state verdict out
   status_task_concluded "$STATE/$ID.status" "$META" || return 0
-  refusal_run_needs_worker "$WT" && verdict=0 || verdict=$?
-  case "$verdict" in
-    1)
-      echo "The finished worker at $T is retained: its no-mistakes run $TASK_RUN_ID still needs it (parked at a gate or under way), and a refusal never aborts a run." >&2
-      return 0
-      ;;
-    2)
-      echo "The finished worker at $T is retained: no-mistakes could not prove that no run of this task's own still needs it (status unavailable, timed out, or unrecognized); rerun teardown once no-mistakes answers." >&2
-      return 0
-      ;;
-  esac
   state=$(fm_backend_agent_state "$BACKEND" "$T")
   case "$state" in
     dead)
@@ -1758,6 +1749,17 @@ stop_concluded_worker_for_refusal() {
       ;;
     missing)
       echo "The finished worker's endpoint $T is already gone (endpoint state: missing): nothing is running, but a keep answer cannot relaunch into it - reconcile the task first (bin/fm-crew-state.sh $ID; the stuck-crewmate-recovery playbook). The worktree, its work, and the task record are retained." >&2
+      return 0
+      ;;
+  esac
+  refusal_run_needs_worker "$WT" && verdict=0 || verdict=$?
+  case "$verdict" in
+    1)
+      echo "The finished worker at $T is retained: its no-mistakes run $TASK_RUN_ID still needs it (parked at a gate or under way), and a refusal never aborts a run." >&2
+      return 0
+      ;;
+    2)
+      echo "The finished worker at $T is retained: no-mistakes could not prove that no run of this task's own still needs it (status unavailable, timed out, or unrecognized); rerun teardown once no-mistakes answers." >&2
       return 0
       ;;
   esac
