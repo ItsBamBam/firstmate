@@ -454,9 +454,16 @@ print_open_decisions_section() {
 
   while IFS=$(printf '\t') read -r task key verb note; do
     [ -n "$task" ] || continue
-    line="$task"
-    [ "$key" = default ] || line="$line [key=$key]"
-    line="$line $verb: $note"
+    # A concluded single-owner task's leftover rows are history, not decisions
+    # anyone can still answer (bin/fm-classify-lib.sh's status_task_concluded);
+    # they used to re-list on every drain until cleanup deleted the log.
+    if status_task_concluded "$STATE/$task.status" "$STATE/$task.meta"; then
+      continue
+    fi
+    # The key is always shown, `default` included, so the closing command
+    # printed below can be typed for any listed row: an unkeyed line's key IS
+    # the literal `default` (bin/fm-send.sh header).
+    line="$task [key=$key] $verb: $note"
     # The shared cut counts the item's own characters; the trailing newline this
     # section's global budget also pays for is this caller's, so the per-item
     # allowance passed down is one short of the cap.

@@ -47,6 +47,9 @@ case "$1 ${2:-}" in
       "$FM_FAKE_HERDR_REAL_SLEEP" "$FM_FAKE_HERDR_SERVER_DELAY"
     fi
     printf '%s\n' running > "$state/$session"
+    if [ "${FM_FAKE_HERDR_SERVER_LINGER:-0}" != 0 ]; then
+      "$FM_FAKE_HERDR_REAL_SLEEP" "$FM_FAKE_HERDR_SERVER_LINGER"
+    fi
     ;;
   "status --json")
     if [ "$lab_state" = running ]; then
@@ -86,11 +89,39 @@ run_with_fake() {
     FM_FAKE_HERDR_LOG="$FAKE_LOG" \
     FM_FAKE_HERDR_REAL_SLEEP="$REAL_SLEEP" \
     FM_FAKE_HERDR_SERVER_DELAY="${FM_FAKE_HERDR_SERVER_DELAY:-0}" \
+    FM_FAKE_HERDR_SERVER_LINGER="${FM_FAKE_HERDR_SERVER_LINGER:-0}" \
     FM_FAKE_HERDR_FAST_POLL="${FM_FAKE_HERDR_FAST_POLL:-}" \
     FM_FAKE_HERDR_DELETE_FAIL="${FM_FAKE_HERDR_DELETE_FAIL:-}" \
     FM_FAKE_HERDR_TITLE_FAIL="${FM_FAKE_HERDR_TITLE_FAIL:-}" \
     FM_HERDR_LAB_STATE_DIR="$TRIPWIRES" \
     "$@"
+}
+
+# The lab server must be the background job itself: a backgrounded shell
+# function would leave a copy of this script as the server's parent (the same
+# leak that kept a fleet launcher alive for hours on 2026-09-15) and cancel
+# would kill that copy, orphaning the real server.
+test_provision_backgrounds_the_server_binary_not_a_script_copy() {
+  local name="fm-lab-direct-$$" own_cmd server_pid parent_cmd children child
+  own_cmd=$(ps -o command= -p "$$")
+  # The fake server reports running at once and then lingers, like the real
+  # headless server, so the process tree can be read while it is up.
+  FM_FAKE_HERDR_SERVER_LINGER=5 run_with_fake fm_herdr_lab_provision "$name" || fail "lingering provision failed"
+  children=$(pgrep -P "$$" 2>/dev/null || true)
+  server_pid=
+  for child in $children; do
+    case "$(ps -o command= -p "$child" 2>/dev/null)" in
+      "$own_cmd") fail "provision left a copy of this script (pid $child) waiting on the lab server" ;;
+      *herdr*server*) server_pid=$child ;;
+    esac
+  done
+  [ -n "$server_pid" ] || fail "the lab server should be a direct background child of the provisioning shell; children were: $children"
+  parent_cmd=$(ps -o command= -p "$(ps -o ppid= -p "$server_pid" | tr -d ' ')" 2>/dev/null || true)
+  [ "$parent_cmd" = "$own_cmd" ] || fail "the lab server's parent should be the provisioning shell itself, not '$parent_cmd'"
+  kill -TERM "$server_pid" 2>/dev/null || true
+  wait "$server_pid" 2>/dev/null || true
+  run_with_fake fm_herdr_lab_teardown "$name" || fail "guarded teardown failed"
+  pass "fm-herdr-lab: provision backgrounds the server binary directly, never a script copy"
 }
 
 test_refuses_unsafe_names() {
@@ -509,6 +540,7 @@ test_viewer_refuses_unowned_sessions
 test_viewer_start_cancels_an_unrecorded_launcher
 test_viewer_timeout_allows_launcher_escalation
 test_viewer_start_requires_its_owned_process
+test_provision_backgrounds_the_server_binary_not_a_script_copy
 test_viewer_stop_only_signals_owned_processes
 test_viewer_stop_requires_the_recorded_parent
 test_interrupted_viewer_start_cancels_launcher

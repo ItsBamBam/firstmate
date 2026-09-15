@@ -1164,7 +1164,9 @@ test_dirty_worktree_refuses() {
   expect_code 1 "$rc" "dirty-wt: teardown should refuse a dirty worktree even when the committed work has landed"
   grep -q REFUSED "$case_dir/stderr" || fail "dirty-wt: no REFUSED line in stderr"
   grep -q "uncommitted changes" "$case_dir/stderr" || fail "dirty-wt: refusal did not cite uncommitted changes"
-  pass "dirty worktree is refused even when its committed work has landed (dirty always wins)"
+  grep -q "bin/fm-captain-hold.sh hold task-x1 --reason" "$case_dir/stderr" \
+    || fail "dirty-wt: refusal did not point at holding the task for the captain's discard OK: $(cat "$case_dir/stderr")"
+  pass "dirty worktree is refused even when its committed work has landed (dirty always wins), and the refusal names the hold that bounds the wait"
 }
 
 test_gh_error_and_content_absent_refuses() {

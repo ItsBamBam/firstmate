@@ -156,7 +156,11 @@
 # blocked: record in the target task's state/<id>.status. fm-send itself
 # appends the closing resolved line to that status file, so the captain-facing
 # OPEN DECISIONS record closes at answer time and never depends on the busy
-# worker writing a matching resolved line. Ordinary keys close with
+# worker writing a matching resolved line. A needs-decision: or blocked: line
+# written without any [key=...] token carries the literal key `default` (the
+# fold's rule in bin/fm-classify-lib.sh), so `--resolve-key default` is how
+# such a line is answered and closed; the OPEN DECISIONS listing prints that
+# key like any other. Ordinary keys close with
 # "resolved [key=<key>]: answered: <capped excerpt>". A reserved key
 # (pending-reply-* today; bin/fm-classify-lib.sh's reserved-key guard) is
 # closed with the owning library's vocabulary note

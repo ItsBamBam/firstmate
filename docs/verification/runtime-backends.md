@@ -790,6 +790,55 @@ The CLI matrix was checked directly:
 All destructive verification used `bin/fm-herdr-lab.sh` with a non-default `fm-lab-` name and a byte-identical default-session tripwire.
 No ambient `herdr server stop` command is a supported test operation.
 
+### Server launch detachment
+
+Measured 2026-09-15 on macOS 26 (Darwin 25.6.0) aarch64 with Herdr 0.9.0 protocol 22, the guarantee behind `fm_backend_herdr_server_ensure`'s detached launch and `bin/fm-herdr-lab.sh provision`: a real `herdr server` never daemonizes itself, so whatever forks it stays its parent until the server exits.
+The server advertises this structurally in `status --json`, read through the lab helper's own scoped call:
+
+```sh
+"$HERDR_LAB_HELPER" run "$HERDR_LAB_SESSION" status --json | jq -c '.server.capabilities.detached_server_daemon'
+```
+
+```text
+false
+```
+
+The incident shape, as read from the live fleet before the fix (the launcher copy has `ppid 1` because its own parent exited; it is the server's parent and shares its process group):
+
+```sh
+ps -p 78848 -o pid,ppid,pgid,etime,stat,command
+pgrep -P 78848 -a
+```
+
+```text
+  PID  PPID  PGID  ELAPSED STAT COMMAND
+78848     1 78235 04:37:36 S    bash bin/fm-spawn.sh osbambam-pi-skill-frontmatter /Users/brycemajdick/Desktop/OSBAMBAM --mode no-mistakes --yolo off --harness pi --model openai-codex/gpt-5.4-mini --effort low
+78850 78848 78235 04:37:45 S    herdr server --session default
+```
+
+The same shape reproduced live through the still-deployed lab helper (a backgrounded shell function), then the fixed helper (the binary exec'd from the background job), each on its own guarded `fm-lab-` session with the default-session tripwire intact:
+
+```sh
+NAME=$("$HELPER" name <label>)
+"$HELPER" provision "$NAME"
+pid=$(pgrep -f "herdr server --session $NAME" | head -1)
+ps -o pid,ppid,pgid,command -p "$pid"
+ps -o pid,command -p "$(ps -o ppid= -p "$pid" | tr -d ' ')"
+"$HELPER" teardown "$NAME"
+```
+
+```text
+# deployed helper (before the fix)
+38121 38119 38081 herdr server --session fm-lab-firstmate-finish-38084-30766
+38119 bash /Users/brycemajdick/firstmate/bin/fm-herdr-lab.sh provision fm-lab-firstmate-finish-38084-30766
+# fixed helper
+39035     1 39009 herdr server --session fm-lab-fm-fixed-launch-39011-19535
+    1 /sbin/launchd
+```
+
+The fleet adapter's own launch additionally gives the server its own process group (`set -m` before the background exec), pinned stub-backed by `tests/fm-backend-herdr.test.sh` (`test_server_ensure_detaches_server_from_launcher`, which fails on the pre-fix function) and refreshed against the real binary by `tests/fm-backend-herdr-smoke.test.sh`'s detachment assertion.
+The lab helper's launch is pinned by `tests/fm-herdr-lab.test.sh` (`test_provision_backgrounds_the_server_binary_not_a_script_copy`).
+
 ### fm-remote server birth and login-keychain access
 
 Measured 2026-09-09 on macOS 26 (Darwin 25.6.0) aarch64 with Claude Code 2.1.266 and Herdr 0.9.0, the guarantee behind `bin/fm-remote-herdr-guard.sh` and the doctor's `herdr-server` check: login-keychain access follows the audit session a process was born into, never the launch shape or the shell.

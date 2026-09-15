@@ -426,7 +426,11 @@ fm_herdr_lab_provision() { # <session>
   else
     fm_herdr_lab_prepare "$name" || return 1
   fi
-  fm_herdr_lab_raw "$name" server >/dev/null 2>&1 &
+  # Launch the binary itself in the background, never a shell function: a
+  # backgrounded function forks a copy of this script to run it, that copy is
+  # what $! names and what cancel would kill, and the real server would be
+  # left running as that copy's orphan. Exec'd directly, $! is the server.
+  HERDR_SESSION="$name" exec herdr server --session "$name" </dev/null >/dev/null 2>&1 &
   server_pid=$!
   attempt=0
   max_attempts=300

@@ -67,6 +67,20 @@ esac
 [ -n "$SEEDED_TAB_ID" ] || fail "the first container_ensure in a brand-new isolated session must CREATE the workspace and report its seeded default tab id"
 pass "real herdr: container_ensure starts the isolated session's server, creates the firstmate workspace ($CONTAINER), and reports its seeded default tab id ($SEEDED_TAB_ID)"
 
+# The server that container_ensure just started must be detached from this
+# launcher: a real `herdr server` does not daemonize, so its parent must not be
+# a lingering copy of this script, and it must lead its own process group
+# (docs/herdr-backend.md "Current transport behavior"; the stub-backed shape is pinned in
+# tests/fm-backend-herdr.test.sh).
+SERVER_PID=$(pgrep -f "herdr server --session $SESSION" | head -1 || true)
+[ -n "$SERVER_PID" ] || fail "real herdr: could not find the lab session's server process after container_ensure"
+SERVER_PARENT_CMD=$(ps -o command= -p "$(ps -o ppid= -p "$SERVER_PID" | tr -d ' ')" 2>/dev/null || true)
+[ "$SERVER_PARENT_CMD" != "$(ps -o command= -p "$$")" ] \
+  || fail "real herdr: the server's parent is a live copy of this launcher script; the launcher would live as long as the server"
+SERVER_PGID=$(ps -o pgid= -p "$SERVER_PID" | tr -d ' ')
+[ "$SERVER_PGID" = "$SERVER_PID" ] || fail "real herdr: the server should lead its own process group (pgid $SERVER_PGID, pid $SERVER_PID)"
+pass "real herdr: the launched server is detached from the launcher (parent is not a launcher copy, own process group)"
+
 # --- client selection: the real status shape the selection reads ------------
 # bin/backends/herdr.sh "client selection" steps around a client the running
 # server refuses by reading .server.running/.server.compatible per session; a
