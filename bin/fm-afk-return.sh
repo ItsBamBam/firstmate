@@ -27,7 +27,12 @@
 # `resolved [key=...]`, or explicitly reclassified in the status stream with a
 # durable reason, before an ordinary captain request may proceed.
 # `needs-decision:` is deliberately not part of this blocker gate. The gate
-# keeps every open blocker until that blocker's own resolution is proven.
+# keeps every open blocker until that blocker's own resolution is proven,
+# except on a task whose own worker has already concluded: a leftover blocked
+# or needs-decision row on a concluded single-owner task is history the worker
+# moved past, and bin/fm-classify-lib.sh's status_task_concluded is the one
+# owner that retires such rows here, in the brief's waiting list, and in the
+# wake drain alike (a secondmate is never concluded there).
 # Captain-verdict outcomes are listed under "waiting on you", but cannot exempt
 # a blocker because decision-key provenance is deferred to phase 4
 # (fm-afk-clauses-execute-r1). Away-window attribution uses second-resolution
@@ -184,6 +189,10 @@ scan_open_blockers() {  # -> tab-separated blocker rows
       STATUS_SCAN_ERROR=$status
       return 1
     fi
+    # A concluded task's leftover rows are history nobody can still act on
+    # (bin/fm-classify-lib.sh's status_task_concluded); listing them held the
+    # return over work that had already landed or closed.
+    status_task_concluded "$status" "$meta" && continue
     while IFS="$(printf '\t')" read -r key verb summary; do
       [ "$verb" = blocked ] || continue
       clean_summary=$(printf '%s' "$summary" | clean_field)
@@ -469,6 +478,9 @@ render_return_brief() {  # <evidence-file> <blockers-file> <since-epoch>
     task=$(basename "$meta"); task=${task%.meta}
     status="$STATE/$task.status"
     status_path_readable "$status" || continue
+    # The same concluded-task retirement as scan_open_blockers: a decision row
+    # the worker already moved past is not waiting on the captain.
+    status_task_concluded "$status" "$meta" && continue
     while IFS="$(printf '\t')" read -r key verb summary; do
       [ "$verb" = needs-decision ] || continue
       count=$((count + 1))

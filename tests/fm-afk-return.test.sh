@@ -450,6 +450,51 @@ test_return_brief_composes_from_record_store_and_held_set() {
   pass "the return brief renders health, mandate, waiting, could-not-fix, handled, and cost from durable records, and the gate shrinks to what the away session could not fix"
 }
 
+test_concluded_task_leftover_rows_do_not_hold_return() {
+  local dir out rc gate
+  dir="$TMP_ROOT/concluded"
+  install_runner "$dir"
+  # A live blocker on a running task opens the gate exactly as before.
+  seed_live_blocker "$dir" tmux token
+  # A ship task whose worker was steered past its blocker and its decision and
+  # then concluded: its backlog row is done while the status log still holds
+  # the open rows, the shape landed work keeps until cleanup deletes the log.
+  (cd "$dir/home" && tasks-axi add landed 'Land the windows fix' --file data/backlog.md >/dev/null \
+    && tasks-axi 'done' landed --file data/backlog.md >/dev/null) \
+    || fail "could not seed the done backlog row"
+  printf 'window=synthetic:fm-landed\nbackend=tmux\nkind=ship\n' > "$dir/home/state/landed.meta"
+  printf 'blocked [key=stale]: needs the upstream dependency\nneeds-decision [key=pick]: choose the target\nworking: steered past both\ndone: PR https://example.invalid/pr/1 checks green\n' \
+    > "$dir/home/state/landed.status"
+  # A persistent secondmate multiplexes many concerns onto one stream, so its
+  # terminal line on one concern never retires an open blocker on another.
+  printf 'window=synthetic:fm-mate\nbackend=tmux\nkind=secondmate\n' > "$dir/home/state/mate.meta"
+  printf 'blocked [key=creds]: the mate needs a credential\ndone: an unrelated routed concern finished\n' \
+    > "$dir/home/state/mate.status"
+  date +%s > "$dir/home/state/.afk"
+  : > "$dir/home/state/.fake-drain"
+
+  set +e
+  out=$(run_return "$dir" begin)
+  rc=$?
+  set -e
+  [ "$rc" -eq 3 ] || fail "the live blockers should still gate the return (rc=$rc): $out"
+  gate="$dir/home/state/.afk-return-catchup"
+  assert_contains "$out" 'firstmate-actionable blocker: repair-task [key=token]' "the live blocker did not gate"
+  assert_contains "$out" 'firstmate-actionable blocker: mate [key=creds]' "a secondmate's terminal line on another concern retired its open blocker"
+  assert_not_contains "$out" 'landed [key=stale]' "a concluded task's stale blocker still held return catch-up"
+  assert_not_contains "$out" 'landed [key=pick]' "a concluded task's stale decision was listed as waiting on the captain"
+  grep -q 'landed' "$gate" && fail "the gate retained a concluded task's stale blocker"
+
+  # Remediate only the live blockers; the concluded task's stale rows need no
+  # resolved line because nobody can act on them.
+  printf 'resolved [key=token]: the token was refreshed\n' >> "$dir/home/state/repair-task.status"
+  printf 'resolved [key=creds]: the credential was provisioned\n' >> "$dir/home/state/mate.status"
+  out=$(run_return "$dir" check) || fail "check still held return catch-up over a concluded task's stale blocker: $out"
+  assert_contains "$out" 'catch-up clear' "check did not clear once only the concluded task's stale rows remained"
+  [ ! -e "$gate" ] || fail "the cleared check left the gate behind"
+  pass "a concluded task's leftover blocked and needs-decision rows neither hold return catch-up nor read as waiting on the captain"
+}
+
 test_return_brief_keeps_refresh_history() {
   local dir out first_epoch
   dir="$TMP_ROOT/brief-refresh"
@@ -794,6 +839,7 @@ test_check_retries_recorded_terminal_teardown
 test_unreadable_superseded_archive_keeps_return_gated
 test_missing_final_archive_keeps_retained_contract_gated
 test_return_brief_composes_from_record_store_and_held_set
+test_concluded_task_leftover_rows_do_not_hold_return
 test_return_brief_keeps_refresh_history
 test_malformed_posture_record_keeps_catchup_gated
 test_missing_epoch_record_stays_required_after_disappearing
