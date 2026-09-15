@@ -1,0 +1,56 @@
+# temp Firstmate home: two concluded tasks with leftover blocker/decision rows (landed, duplicate-closed) and a secondmate; away flag set
+$ bin/fm-afk-return.sh begin   # this change
+fm-afk-launch: away mode stopped; daemon terminal torn down, .afk cleared, and the posture record archived
+=== Return brief (away 2026-09-15T21:12:46Z -> 2026-09-15T21:12:48Z, 2s) ===
+Supervisor health:
+  - GAP: the away daemon was not running at return (the away flag stood with no live daemon)
+Mandate clauses:
+  (no away-posture record for this window; legacy away flag only)
+Waiting on you:
+  - mate [key=route] needs your decision: choose a route
+Tried and failed, or could not be fixed:
+  - pi-skill-frontmatter-retry: failed: closed as a duplicate of pi-skill-frontmatter-clean
+Handled while away:
+  (no routine outcomes recorded in the store for this window)
+Cost: 0 supervision outcome(s) recorded (0 routine, 0 captain); 3 task(s) live at return.
+catch-up health: GAP: the away daemon was not running at return (the away flag stood with no live daemon)
+catch-up wake: STATUS OUTCOME BACKSTOP (newest captain-facing task event has no covering branch outcome):
+catch-up wake: mate done: heartbeat complete
+catch-up wake: osbambam-unittest-repair done: landed locally at 19b2220
+catch-up wake: pi-skill-frontmatter-retry failed: closed as a duplicate of pi-skill-frontmatter-clean
+catch-up wake: OPEN DECISIONS (still open, folded from the durable status logs - not just the latest line):
+catch-up wake: mate [key=route] needs-decision: choose a route
+catch-up wake: OPEN DECISIONS: close one by answering it: bin/fm-send.sh <task> --resolve-key <key> '<answer>'
+fm-afk-return: catch-up clear; ordinary captain work may proceed
+exit=0
+
+$ ls state/.afk-return-catchup 2>&1   # a held gate would leave this file
+ls: /tmp/fm-afk-live.SRX9IG/state/.afk-return-catchup: No such file or directory
+
+# now the landed task gets a FRESH newest blocker (task is live again)
+$ bin/fm-afk-return.sh check
+=== Return brief ===
+Supervisor health:
+  - supervision ran through the away window with no detected gap (watcher beat 3s old at return)
+Mandate clauses:
+  (no away-posture record for this window; legacy away flag only)
+Waiting on you:
+  - mate [key=route] needs your decision: choose a route
+Tried and failed, or could not be fixed:
+  - osbambam-unittest-repair [key=default] still blocked, firstmate remediates before ordinary work: stopped on request; branch preserved
+  - osbambam-unittest-repair [key=leftover] still blocked, firstmate remediates before ordinary work: cleanup refused; leftover files need the captain
+  - pi-skill-frontmatter-retry: failed: closed as a duplicate of pi-skill-frontmatter-clean
+Handled while away:
+  (no routine outcomes recorded in the store for this window)
+Cost: 0 supervision outcome(s) recorded (0 routine, 0 captain); 3 task(s) live at return.
+fm-afk-return: catch-up must finish before the captain request
+catch-up health: supervision ran through the away window with no detected gap (watcher beat 3s old at return)
+catch-up wake: OPEN DECISIONS (still open, folded from the durable status logs - not just the latest line):
+catch-up wake: mate [key=route] needs-decision: choose a route
+catch-up wake: osbambam-unittest-repair blocked: stopped on request; branch preserved
+catch-up wake: osbambam-unittest-repair [key=leftover] blocked: cleanup refused; leftover files need the captain
+catch-up wake: OPEN DECISIONS: close one by answering it: bin/fm-send.sh <task> --resolve-key <key> '<answer>'
+firstmate-actionable blocker: osbambam-unittest-repair [key=default] stopped on request; branch preserved
+firstmate-actionable blocker: osbambam-unittest-repair [key=leftover] cleanup refused; leftover files need the captain
+fm-afk-return: handle each blocker now, or close it with resolved [key=...] and append a durable reclassification reason, then run bin/fm-afk-return.sh check
+exit=3

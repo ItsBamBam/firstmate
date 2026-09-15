@@ -1,0 +1,17 @@
+# temp home: a duplicate-closed ship task (newest line failed:) with a leftover needs-decision row, and a secondmate with the same shape
+$ cat state/pi-skill-frontmatter-retry.status
+  needs-decision [key=dup]: which copy survives
+  failed: closed as a duplicate of pi-skill-frontmatter-clean
+$ bin/fm-captain-hold.sh complete pi-skill-frontmatter-retry --none   # leftover row of a concluded single-owner task must not block
+complete: pi-skill-frontmatter-retry captain-call inventory reviewed
+exit=0
+$ bin/fm-captain-hold.sh verify pi-skill-frontmatter-retry
+verified: pi-skill-frontmatter-retry captain-call inventory
+exit=0
+
+$ cat state/sample-mate.status  (kind=secondmate)
+  needs-decision [key=route]: choose a route
+  done: heartbeat complete
+$ bin/fm-captain-hold.sh complete sample-mate --none   # adversarial: a secondmate is never read as concluded
+fm-captain-hold: origin sample-mate still has open captain decisions in its status stream; hold a captain task for what remains, or answer them, before attesting --none
+exit=1

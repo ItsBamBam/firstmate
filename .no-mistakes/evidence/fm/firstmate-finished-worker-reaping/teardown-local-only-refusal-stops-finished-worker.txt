@@ -1,0 +1,73 @@
+# Live lab: private tmux server (-L socket via PATH shim), temp state/data/config dirs, a real tmux window whose
+# foreground is a fake claude agent (symlink of bash named claude, exits on "/exit"), and a task worktree with one
+# unmerged commit. FM_GATE_REFUSE_BYPASS=1 is the documented test-harness escape (bin/fm-gate-refuse-lib.sh header)
+# for driving the real lifecycle scripts against a temp-sandbox fleet from inside a no-mistakes gate worktree.
+
+$ ps -o pid,ppid,pgid,command -p <pane_pid>; pgrep -P <pane_pid> -l   # before teardown
+  PID  PPID  PGID COMMAND
+72103 72068 72103 /bin/bash --noprofile --norc -c PS1='$ '; claude '/tmp/fm-live-teardown.R8qdrE/bin/agent.sh'; exec /bin/bash --noprofile --norc -i
+72108 bash
+
+$ tmux capture-pane -p -t firstmate:fm-task-live   # before teardown
+
+ Fake claude agent (finished; idle)
+
+❯
+
+$ probe (real bin/backends/tmux.sh classifier) before teardown
+agent_state=alive
+composer_state=empty
+foreground_comms=/bin/bash claude 
+
+$ cat state/task-live.meta state/task-live.status
+window=firstmate:fm-task-live
+endpoint_task_id=task-live
+worktree=/tmp/fm-live-teardown.R8qdrE/wt
+project=/tmp/fm-live-teardown.R8qdrE/project
+kind=ship
+mode=local-only
+harness=claude
+spawn_gen=live-teardown-task-live
+blocked: stopped on request; branch preserved
+working: resumed after the steer
+done: local validation green, ready to land
+
+$ bin/fm-teardown.sh task-live   # concluded (done:) local-only task, one unmerged commit -> refusal
+REFUSED: local-only worktree /tmp/fm-live-teardown.R8qdrE/wt has work not yet merged into main and not on any remote.
+commits not yet on main:
+ab4e183 unmerged work
+Merge the branch into local main first (bin/fm-merge-local.sh after the captain approves), or push to a fork/remote, or get the captain's explicit OK to discard, then --force.
+While that is pending, hold the task for it: bin/fm-captain-hold.sh hold task-live --reason '<what is pending>' - or, when task-live is already closed in the backlog, mint the call: bin/fm-captain-hold.sh hold <new-id> --title '<title>' --origin task-live --reason '<what is pending>'.
+Stopped the finished worker's agent at firstmate:fm-task-live (fm-control exit: stopped task-live harness=claude backend=tmux endpoint=firstmate:fm-task-live worktree=/tmp/fm-live-teardown.R8qdrE/wt); its endpoint, the worktree, its work, and the task record are retained for a relaunch or a discard.
+exit=1
+
+$ tmux list-windows -t firstmate ; tmux capture-pane -p   # after teardown
+idle pane_current_command=zsh
+fm-task-live pane_current_command=bash
+
+ Fake claude agent (finished; idle)
+
+❯ /exit
+
+bye
+
+The default interactive shell is now zsh.
+To update your account to use zsh, please run `chsh -s /bin/zsh`.
+For more details, please visit https://support.apple.com/kb/HT208050.
+bash-3.2$
+
+$ ps -o pid,ppid,pgid,command -p <pane_pid>; pgrep -P <pane_pid> -l   # after teardown
+  PID  PPID  PGID COMMAND
+72103 72068 72103 /bin/bash --noprofile --norc -i
+(no children: the agent is gone)
+
+$ probe (real bin/backends/tmux.sh classifier) after teardown
+agent_state=dead
+composer_state=unknown
+foreground_comms=/bin/bash 
+
+$ git -C wt status --short --branch; git -C wt log --oneline -1; ls state/   # copy, branch, commit, record retained
+## fm/task-live
+ab4e183 unmerged work
+task-live.meta
+task-live.status

@@ -1,0 +1,45 @@
+# state dir models the reported incident: two landed tasks and one duplicate-closed task with leftover unkeyed/keyed
+# blocker rows, one still-live task, one secondmate. Same state driven by the base-commit drain and by this change's drain.
+--- mate.status (kind=secondmate)
+  needs-decision [key=route]: choose a route
+  done: heartbeat complete
+--- osbambam-unittest-repair.status (kind=ship)
+  blocked: stopped on request; branch preserved
+  working: resumed after the steer
+  done: landed locally at 19b2220
+--- pi-skill-frontmatter-clean.status (kind=ship)
+  needs-decision [key=scope]: widen the frontmatter cleanup or not
+  done: landed locally at a75027f
+--- pi-skill-frontmatter-retry.status (kind=<no meta>)
+  blocked: waiting on the captain to pick the duplicate
+  failed: closed as a duplicate of pi-skill-frontmatter-clean
+--- still-live.status (kind=ship)
+  done: first milestone
+  blocked: recover refused again; handoff written
+
+=== BEFORE (base commit db645b8): FM_STATE_OVERRIDE=$S bin/fm-wake-drain.sh
+STATUS OUTCOME BACKSTOP (newest captain-facing task event has no covering branch outcome):
+mate done: heartbeat complete
+osbambam-unittest-repair done: landed locally at 19b2220
+pi-skill-frontmatter-clean done: landed locally at a75027f
+pi-skill-frontmatter-retry failed: closed as a duplicate of pi-skill-frontmatter-clean
+OPEN DECISIONS (still open, folded from the durable status logs - not just the latest line):
+mate [key=route] needs-decision: choose a route
+osbambam-unittest-repair blocked: stopped on request; branch preserved
+pi-skill-frontmatter-clean [key=scope] needs-decision: widen the frontmatter cleanup or not
+pi-skill-frontmatter-retry blocked: waiting on the captain to pick the duplicate
+still-live blocked: recover refused again; handoff written
+OPEN DECISIONS: close one by answering it: bin/fm-send.sh <task> --resolve-key <key> '<answer>'
+exit=0
+
+=== AFTER (this change cc38451): FM_STATE_OVERRIDE=$S bin/fm-wake-drain.sh
+STATUS OUTCOME BACKSTOP (newest captain-facing task event has no covering branch outcome):
+mate done: heartbeat complete
+osbambam-unittest-repair done: landed locally at 19b2220
+pi-skill-frontmatter-clean done: landed locally at a75027f
+pi-skill-frontmatter-retry failed: closed as a duplicate of pi-skill-frontmatter-clean
+OPEN DECISIONS (still open, folded from the durable status logs - not just the latest line):
+mate [key=route] needs-decision: choose a route
+still-live blocked: recover refused again; handoff written
+OPEN DECISIONS: close one by answering it: bin/fm-send.sh <task> --resolve-key <key> '<answer>'
+exit=0

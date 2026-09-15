@@ -1,0 +1,38 @@
+=== C. adversarial: the newest status line is a live blocked: (worker not concluded) - the refusal must NOT stop it ===
+task record:
+  window=firstmate:fm-task-live
+  endpoint_task_id=task-live
+  worktree=/tmp/fm-live-teardown.R8qdrE/wt
+  project=/tmp/fm-live-teardown.R8qdrE/project
+  kind=ship
+  mode=local-only
+  harness=claude
+  spawn_gen=live-teardown-task-live
+status log (newest last):
+  blocked: stopped on request; branch preserved
+  working: resumed after the steer
+  done: local validation green, ready to land
+  blocked [key=leftover]: cleanup refused; leftover files need the captain
+before:
+  tmux windows: idle(zsh) fm-task-live(bash) 
+  backend classifier: agent_state=alive composer_state=empty foreground_comms=claude  
+  worktree: ## fm/task-live  head=ab4e183
+  state dir: task-live.meta task-live.status 
+$ bin/fm-teardown.sh task-live 
+  REFUSED: local-only worktree /tmp/fm-live-teardown.R8qdrE/wt has work not yet merged into main and not on any remote.
+  commits not yet on main:
+  ab4e183 unmerged work
+  Merge the branch into local main first (bin/fm-merge-local.sh after the captain approves), or push to a fork/remote, or get the captain's explicit OK to discard, then --force.
+  While that is pending, hold the task for it: bin/fm-captain-hold.sh hold task-live --reason '<what is pending>' - or, when task-live is already closed in the backlog, mint the call: bin/fm-captain-hold.sh hold <new-id> --title '<title>' --origin task-live --reason '<what is pending>'.
+  exit=1
+after:
+  tmux windows: idle(zsh) fm-task-live(bash) 
+  backend classifier: agent_state=alive composer_state=empty foreground_comms=claude  
+  worktree: ## fm/task-live  head=ab4e183
+  state dir: task-live.meta task-live.status 
+pane (last lines):
+  | 
+  |  Fake claude agent (finished; idle)
+  | 
+  | ❯
+
