@@ -1,0 +1,9 @@
+ok - help works without an OSBAMBAM root
+ok - search reports no verified relevant card without inventing one
+ok - search always requests exactly three cards
+ok - search has no status filter that could hide draft prior art
+ok - search marks a verified hit without a status filter
+ok - open and trace call the existing library CLI
+ok - recall queries OSBAMBAM memory through brain.js with its default hit count
+ok - record-outcome routes the outcome to the library owner without a local store
+ok - library writes stay with the OSBAMBAM owner

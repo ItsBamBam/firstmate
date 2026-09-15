@@ -1,0 +1,4 @@
+1c1
+< 30db7d0c68186ccd2a54c04c40d7f5d61c8a55b9faeb9701e204fdf8c223574f  /Users/brycemajdick/Library/Application Support/OSBAMBAM/library/catalog.sqlite
+---
+> 4d39e6b9ed2412fff8cc04ab9daf388b6482a77d81bde33f8d960876d1f90a1d  /Users/brycemajdick/Library/Application Support/OSBAMBAM/library/catalog.sqlite
