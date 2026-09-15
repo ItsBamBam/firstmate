@@ -790,6 +790,7 @@ tests/fm-tool-update-check.test.sh 14176
 tests/fm-trace-context-lib.test.sh 209
 tests/fm-trace-context-spawn.test.sh 44702
 tests/fm-turnend-guard.test.sh 42565
+tests/fm-unified-library.test.sh 2000
 tests/fm-update.test.sh 5212
 tests/fm-vendor-auth-probe.test.sh 43316
 tests/fm-voice-relay.test.sh 28699
@@ -1409,6 +1410,9 @@ families_for_changed_path() {
       ;;
     bin/fm-quota-choose.sh)
       printf '%s\n' "__script__:fm-quota-choose.test.sh"
+      ;;
+    bin/fm-unified-library.sh|.agents/skills/unified-library/*)
+      printf '%s\n' "__script__:fm-unified-library.test.sh"
       ;;
     .pi/extensions/fm-branch-supervision.ts|.pi/extensions/lib/fm-async-exec.ts|\
     .pi/extensions/lib/fm-branch-dispatch.ts|.pi/extensions/lib/fm-native-contract.ts)

@@ -1,0 +1,230 @@
+#!/usr/bin/env bash
+# Behavioral tests for bin/fm-unified-library.sh.
+# Drives the public command surface with a mocked OSBAMBAM library CLI.
+set -u
+
+# shellcheck source=tests/lib.sh
+. "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+
+ADAPTER="$ROOT/bin/fm-unified-library.sh"
+TMP_ROOT=$(fm_test_tmproot fm-unified-library)
+HOME_DIR="$TMP_ROOT/home"
+OSBAMBAM="$TMP_ROOT/osbambam"
+FAKEBIN="$TMP_ROOT/fakebin"
+CALLS="$TMP_ROOT/calls"
+LIBRARY_PY="$OSBAMBAM/os/scripts/library.py"
+BRAIN_JS="$OSBAMBAM/rubric-second-brain/brain.js"
+DATA_DIR="$HOME_DIR/data"
+
+assert_present "$ADAPTER" "bin/fm-unified-library.sh is missing"
+[ -x "$ADAPTER" ] || fail "bin/fm-unified-library.sh must be executable"
+
+mkdir -p "$HOME_DIR" "$OSBAMBAM/os/scripts" "$OSBAMBAM/rubric-second-brain" \
+  "$FAKEBIN" "$DATA_DIR"
+: >"$CALLS"
+
+cat >"$LIBRARY_PY" <<'PY'
+#!/usr/bin/env python3
+import json
+import os
+import sys
+
+calls = os.environ.get("FM_UL_CALLS")
+if calls:
+    with open(calls, "a", encoding="utf-8") as handle:
+        handle.write(" ".join(sys.argv[1:]) + "\n")
+
+command = sys.argv[1] if len(sys.argv) > 1 else ""
+if command == "search":
+    statuses = "verified,draft"
+    if "--statuses" in sys.argv:
+        statuses = sys.argv[sys.argv.index("--statuses") + 1]
+    query = sys.argv[2]
+    if "verified-hit" in query and "verified" in statuses.split(","):
+        cards = [{
+            "card_id": "CARD-VERIFIED-1",
+            "status": "verified",
+            "title": "Verified hit",
+        }]
+    elif "verified" in statuses.split(",") and "draft" not in statuses.split(","):
+        cards = []
+    else:
+        cards = [{
+            "card_id": "CARD-DRAFT-1",
+            "status": "draft",
+            "title": "Draft prior art",
+        }]
+    json.dump({"cards": cards, "query": query, "status": "ok"}, sys.stdout, indent=2)
+    sys.stdout.write("\n")
+    raise SystemExit(0)
+if command == "open":
+    json.dump({"identifier": sys.argv[2], "kind": "card", "status": "ok"}, sys.stdout, indent=2)
+    sys.stdout.write("\n")
+    raise SystemExit(0)
+if command == "trace":
+    json.dump({"identity": {"kind": "card"}, "outcomes": [], "status": "found"}, sys.stdout, indent=2)
+    sys.stdout.write("\n")
+    raise SystemExit(0)
+if command in {"intake", "record-outcome", "card-status"}:
+    sys.stderr.write("write command should not be invoked: %s\n" % command)
+    raise SystemExit(9)
+sys.stderr.write("unexpected library command: %s\n" % command)
+raise SystemExit(9)
+PY
+chmod +x "$LIBRARY_PY"
+
+cat >"$BRAIN_JS" <<'JS'
+const args = process.argv.slice(2);
+const calls = process.env.FM_UL_CALLS;
+if (calls) {
+  require("fs").appendFileSync(calls, args.join(" ") + "\n");
+}
+process.stdout.write(JSON.stringify({command: args[0], query: args[1], k: args[3]}) + "\n");
+JS
+
+cat >"$FAKEBIN/node" <<'SH'
+#!/usr/bin/env bash
+script=$1
+shift
+exec python3 - "$script" "$@" <<'PY'
+import json
+import os
+import sys
+
+script = sys.argv[1]
+args = sys.argv[2:]
+calls = os.environ.get("FM_UL_CALLS")
+if calls:
+    with open(calls, "a", encoding="utf-8") as handle:
+        handle.write(" ".join(args) + "\n")
+print(json.dumps({"command": args[0], "query": args[1], "k": args[3] if len(args) > 3 else None}))
+PY
+SH
+chmod +x "$FAKEBIN/node"
+
+run_adapter() {
+  PATH="$FAKEBIN:$PATH" \
+    FM_HOME="$HOME_DIR" \
+    FM_OSBAMBAM_ROOT="$OSBAMBAM" \
+    FM_UNIFIED_LIBRARY_PY="$LIBRARY_PY" \
+    FM_BRAIN_JS="$BRAIN_JS" \
+    FM_DATA_OVERRIDE="$DATA_DIR" \
+    FM_UL_CALLS="$CALLS" \
+    "$ADAPTER" "$@"
+}
+
+test_help_does_not_need_osbambam() {
+  local out rc
+  set +e
+  out=$(FM_HOME="$HOME_DIR" "$ADAPTER" --help 2>&1)
+  rc=$?
+  set -e
+  expect_code 0 "$rc" "help without OSBAMBAM"
+  assert_contains "$out" "fm-unified-library.sh recall" "help omitted recall usage"
+  pass "help works without an OSBAMBAM root"
+}
+
+test_search_reports_no_verified_card() {
+  local out
+  : >"$CALLS"
+  out=$(run_adapter search "adapter lookup contract")
+  assert_contains "$out" '"verified_finding": "no verified relevant card"' \
+    "search with only drafts did not report the no-verified-card finding"
+  assert_contains "$out" '"verified_present": false' \
+    "search with only drafts claimed a verified card"
+  assert_contains "$out" '"drafts_are_prior_art": true' \
+    "search did not mark drafts as prior art"
+  assert_contains "$out" "CARD-DRAFT-1" "search dropped the draft card"
+  assert_grep "search adapter lookup contract --limit 3" "$CALLS" \
+    "search did not call library.py with limit 3"
+  pass "search reports no verified relevant card without inventing one"
+}
+
+test_search_caps_limit_at_three() {
+  local out
+  : >"$CALLS"
+  out=$(run_adapter search "adapter lookup contract" --limit 10)
+  assert_grep "search adapter lookup contract --limit 3" "$CALLS" \
+    "search forwarded a limit above 3"
+  assert_contains "$out" '"limit": 3' "annotated search did not record the capped limit"
+  pass "search never requests more than three cards"
+}
+
+test_search_verified_only_and_verified_hit() {
+  local out
+  : >"$CALLS"
+  out=$(run_adapter search "verified-hit adapter" --verified-only)
+  assert_grep "search verified-hit adapter --limit 3 --statuses verified" "$CALLS" \
+    "verified-only search did not pass --statuses verified"
+  assert_contains "$out" '"verified_present": true' \
+    "verified hit was not marked present"
+  assert_not_contains "$out" "no verified relevant card" \
+    "verified hit still reported no verified card"
+  : >"$CALLS"
+  out=$(run_adapter search "adapter lookup contract" --verified-only)
+  assert_contains "$out" '"verified_finding": "no verified relevant card"' \
+    "empty verified-only search did not keep the no-verified-card finding"
+  pass "verified-only search preserves the verified versus absent distinction"
+}
+
+test_open_and_trace_passthrough() {
+  local out
+  : >"$CALLS"
+  out=$(run_adapter open CARD-DRAFT-1)
+  assert_contains "$out" '"identifier": "CARD-DRAFT-1"' "open did not pass the card id"
+  assert_grep "open CARD-DRAFT-1 --budget 4000" "$CALLS" \
+    "open did not use the default budget"
+  : >"$CALLS"
+  out=$(run_adapter trace CARD-DRAFT-1)
+  assert_contains "$out" '"kind": "card"' "trace did not return provenance"
+  assert_grep "trace CARD-DRAFT-1" "$CALLS" "trace did not call library.py"
+  pass "open and trace call the existing library CLI"
+}
+
+test_recall_uses_brain_js() {
+  local out
+  : >"$CALLS"
+  out=$(run_adapter recall "Bryce decisions preferences")
+  assert_contains "$out" '"command": "recall"' "recall did not invoke brain.js recall"
+  assert_grep "recall Bryce decisions preferences --k 3" "$CALLS" \
+    "recall did not pass --k 3"
+  pass "recall queries OSBAMBAM memory through brain.js"
+}
+
+test_record_outcome_stays_local() {
+  local out receipt
+  : >"$CALLS"
+  receipt="$DATA_DIR/unified-library-outcomes.jsonl"
+  rm -f "$receipt"
+  out=$(run_adapter record-outcome CARD-DRAFT-1 mixed --evidence "draft prior art used, not authority")
+  assert_contains "$out" '"outcome": "mixed"' "record-outcome did not echo mixed"
+  assert_contains "$out" '"store": "firstmate-local"' "record-outcome did not mark the local store"
+  assert_present "$receipt" "record-outcome did not write a local receipt"
+  assert_grep '"outcome": "mixed"' "$receipt" "local receipt omitted the outcome"
+  [ ! -s "$CALLS" ] || fail "record-outcome invoked the OSBAMBAM library CLI"
+  pass "application receipts stay in the Firstmate home"
+}
+
+test_writes_are_refused() {
+  local out rc
+  : >"$CALLS"
+  set +e
+  out=$(run_adapter intake /tmp/source 2>&1)
+  rc=$?
+  set -e
+  expect_code 2 "$rc" "intake refusal"
+  assert_contains "$out" "this adapter refuses it" "intake was not refused"
+  assert_contains "$out" "librarian.py research" "refusal omitted Librarian research intake"
+  assert_contains "$out" "library.py intake" "refusal omitted library intake"
+  [ ! -s "$CALLS" ] || fail "refused write still invoked library.py"
+  pass "library writes stay with the OSBAMBAM owner"
+}
+
+test_help_does_not_need_osbambam
+test_search_reports_no_verified_card
+test_search_caps_limit_at_three
+test_search_verified_only_and_verified_hit
+test_open_and_trace_passthrough
+test_recall_uses_brain_js
+test_record_outcome_stays_local
+test_writes_are_refused
