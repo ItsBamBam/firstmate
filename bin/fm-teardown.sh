@@ -203,10 +203,12 @@
 # status_task_concluded) does NOT run this sequence: it stops only the agent,
 # through the control plane's own `exit` mechanics so the endpoint stays
 # relaunchable, and only when no-mistakes proves no run of the task's own
-# still needs that worker - the endpoint, the copy, its work, every durable
-# record, any parked or unproven run, and every process rooted in the
-# retained copy stay - so a finished worker never keeps running because its
-# cleanup is waiting on the captain (stop_concluded_worker_for_refusal):
+# still needs that worker (refusal_run_needs_worker owns what counts as
+# proof) - the endpoint, the copy, its work, every durable record, any
+# parked or unproven run, and every process rooted in the retained copy
+# stay - so a finished worker never keeps running because its cleanup is
+# waiting on the captain (stop_concluded_worker_for_refusal owns the stop
+# and its outcome lines; tests/fm-teardown.test.sh pins both):
 #   Fix 1 - conclude the task's own no-mistakes run. A ship task's worktree can
 #     be torn down while its no-mistakes pipeline run is still PARKED at a gate
 #     (awaiting_approval/fix_review/any awaiting_agent field), with no worker
