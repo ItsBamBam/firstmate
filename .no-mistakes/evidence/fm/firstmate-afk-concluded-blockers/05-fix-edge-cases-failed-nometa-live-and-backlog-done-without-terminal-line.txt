@@ -1,0 +1,60 @@
+# Edge homes: quiet = backlog row done but log ends "working:"; crashed = log ends "failed:"; nometa = no .meta, log ends "done:"; live = newest line is the blocker
+$ cat data/backlog.md
+## In flight
+
+## Queued
+## Done
+- [x] quiet - Backlog done, log still working (done 2026-09-15)
+
+$ cat state/quiet.status
+blocked [key=q1]: waiting on a mirror
+working: moved on
+
+$ cat state/crashed.status
+blocked [key=f1]: flaky provider
+needs-decision [key=f2]: retry or abandon?
+failed: provider outage, abandoning
+
+$ cat state/nometa.status
+blocked [key=n1]: orphan blocker
+done: landed without a meta file
+
+$ cat state/live.status
+working: started
+blocked [key=l1]: needs a port opened
+
+$ FM_HOME=$LAB/home-edge bin/fm-afk-return.sh begin   # target commit e41e897
+fm-afk-launch: away mode stopped; daemon terminal torn down, .afk cleared, and the posture record archived
+=== Return brief (away 2026-09-15T20:11:14Z -> 2026-09-15T20:11:16Z, 2s) ===
+Supervisor health:
+  - GAP: the away daemon was not running at return (the away flag stood with no live daemon)
+  - GAP: the watcher beat was 999999s old at return (grace 300s)
+Mandate clauses:
+  (no away-posture record for this window; legacy away flag only)
+Waiting on you:
+  (nothing)
+Tried and failed, or could not be fixed:
+  - live [key=l1] still blocked, firstmate remediates before ordinary work: needs a port opened
+  - quiet [key=q1] still blocked, firstmate remediates before ordinary work: waiting on a mirror
+  - crashed: failed: provider outage, abandoning
+Handled while away:
+  (no routine outcomes recorded in the store for this window)
+Cost: 0 supervision outcome(s) recorded (0 routine, 0 captain); 3 task(s) live at return.
+fm-afk-return: catch-up must finish before the captain request
+catch-up health: GAP: the away daemon was not running at return (the away flag stood with no live daemon)
+catch-up health: GAP: the watcher beat was 999999s old at return (grace 300s)
+catch-up wake: STATUS OUTCOME BACKSTOP (newest captain-facing task event has no covering branch outcome):
+catch-up wake: crashed failed: provider outage, abandoning
+catch-up wake: nometa done: landed without a meta file
+catch-up wake: OPEN DECISIONS (still open, folded from the durable status logs - not just the latest line):
+catch-up wake: live [key=l1] blocked: needs a port opened
+catch-up wake: quiet [key=q1] blocked: waiting on a mirror
+catch-up wake: OPEN DECISIONS: close one by answering it: bin/fm-send.sh <task> --resolve-key <key> '<answer>'
+firstmate-actionable blocker: live [key=l1] needs a port opened
+firstmate-actionable blocker: quiet [key=q1] waiting on a mirror
+fm-afk-return: handle each blocker now, or close it with resolved [key=...] and append a durable reclassification reason, then run bin/fm-afk-return.sh check
+rc=3
+
+----- state/.afk-return-catchup blocker rows -----
+blocker	live	l1	needs a port opened
+blocker	quiet	q1	waiting on a mirror

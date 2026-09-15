@@ -1,0 +1,37 @@
+$ printf 'resolved [key=token]: ...' >> state/repair-task.status; printf 'resolved [key=creds]: ...' >> state/mate.status
+$ FM_HOME=$LAB/home-base $LAB/base/bin/fm-afk-return.sh check   # base commit 9ad5fc4 (before the fix)
+WARNING: watcher still down (same stale episode; last beat: never, grace 300s) - full banner already printed this episode.
+=== Return brief (away 2026-09-15T20:09:54Z -> 2026-09-15T20:10:45Z, 51s) ===
+Supervisor health:
+  - GAP: the away daemon was not running at return (the away flag stood with no live daemon)
+  - GAP: the watcher beat was 999999s old at return (grace 300s)
+Mandate clauses:
+  (no away-posture record for this window; legacy away flag only)
+Waiting on you:
+  - landed [key=pick] needs your decision: choose the target
+Tried and failed, or could not be fixed:
+  - landed [key=stale] still blocked, firstmate remediates before ordinary work: needs the upstream dependency
+Handled while away:
+  (no routine outcomes recorded in the store for this window)
+Cost: 0 supervision outcome(s) recorded (0 routine, 0 captain); 3 task(s) live at return.
+fm-afk-return: catch-up must finish before the captain request
+catch-up health: GAP: the away daemon was not running at return (the away flag stood with no live daemon)
+catch-up health: GAP: the watcher beat was 999999s old at return (grace 300s)
+catch-up wake: STATUS OUTCOME BACKSTOP (newest captain-facing task event has no covering branch outcome):
+catch-up wake: landed done: PR https://example.invalid/pr/1 checks green
+catch-up wake: mate done: an unrelated routed concern finished
+catch-up wake: OPEN DECISIONS (still open, folded from the durable status logs - not just the latest line):
+catch-up wake: landed [key=stale] blocked: needs the upstream dependency
+catch-up wake: landed [key=pick] needs-decision: choose the target
+catch-up wake: mate [key=creds] blocked: the mate needs a credential
+catch-up wake: repair-task [key=token] blocked: firstmate can refresh the synthetic token
+catch-up wake: OPEN DECISIONS: close one by answering it: bin/fm-send.sh <task> --resolve-key <key> '<answer>'
+firstmate-actionable blocker: landed [key=stale] needs the upstream dependency
+fm-afk-return: handle each blocker now, or close it with resolved [key=...] and append a durable reclassification reason, then run bin/fm-afk-return.sh check
+rc=3
+
+----- gate file present? -----
+/tmp/fm-afk-concluded-live.bnu1BE/home-base/state/.afk-return-catchup
+
+----- guard (read-only consult) -----
+guard rc=4

@@ -1,0 +1,24 @@
+$ printf 'resolved [key=token]: ...' >> state/repair-task.status; printf 'resolved [key=creds]: ...' >> state/mate.status
+$ FM_HOME=$LAB/home-fix bin/fm-afk-return.sh check   # target commit e41e897 (re-run; the gate already cleared on the first check)
+WARNING: watcher still down (same stale episode; last beat: never, grace 300s) - full banner already printed this episode.
+=== Return brief ===
+Supervisor health:
+  - GAP: the watcher beat was 999999s old at return (grace 300s)
+Mandate clauses:
+  (no away-posture record for this window; legacy away flag only)
+Waiting on you:
+  (nothing)
+Tried and failed, or could not be fixed:
+  (nothing)
+Handled while away:
+  (no routine outcomes recorded in the store for this window)
+Cost: 0 supervision outcome(s) recorded (0 routine, 0 captain); 3 task(s) live at return.
+catch-up health: GAP: the watcher beat was 999999s old at return (grace 300s)
+fm-afk-return: catch-up clear; ordinary captain work may proceed
+rc=0
+
+----- gate file present? -----
+ls: /tmp/fm-afk-concluded-live.bnu1BE/home-fix/state/.afk-return-catchup: No such file or directory
+
+----- guard (read-only consult) -----
+guard rc=0

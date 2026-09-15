@@ -1,0 +1,8 @@
+# tests/fm-afk-return.test.sh::test_concluded_task_leftover_rows_do_not_hold_return run alone (before/after)
+$ (base commit 9ad5fc4 bin/) bash tests/fm-afk-return-concluded-only.test.sh
+not ok - a concluded task's stale blocker still held return catch-up (unexpected: 'landed [key=stale]')
+rc=1
+
+$ (target commit e41e897 bin/) bash tests/fm-afk-return.test.sh (concluded case only)
+ok - a concluded task's leftover blocked and needs-decision rows neither hold return catch-up nor read as waiting on the captain
+rc=0

@@ -1,0 +1,45 @@
+$ FM_HOME=$LAB/home-fix bin/fm-afk-return.sh begin   # target commit e41e897
+fm-afk-launch: away mode stopped; daemon terminal torn down, .afk cleared, and the posture record archived
+●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+●  WATCHER DOWN - SUPERVISION IS OFF
+●  3 task(s) in flight, but no watcher has a fresh beacon (last beat: never, grace 300s).
+●  Trust the emitted supervision protocol for this harness; do not use shell & for watcher repair.
+●  This is a supervision warning only; the guarded operation WILL still run.
+●  watcher supervision needs Stop-owned automatic recovery; inspect the hook registration and startup status before ending the turn.
+●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+=== Return brief (away 2026-09-15T20:09:54Z -> 2026-09-15T20:10:14Z, 20s) ===
+Supervisor health:
+  - GAP: the away daemon was not running at return (the away flag stood with no live daemon)
+  - GAP: the watcher beat was 999999s old at return (grace 300s)
+Mandate clauses:
+  (no away-posture record for this window; legacy away flag only)
+Waiting on you:
+  (nothing)
+Tried and failed, or could not be fixed:
+  - mate [key=creds] still blocked, firstmate remediates before ordinary work: the mate needs a credential
+  - repair-task [key=token] still blocked, firstmate remediates before ordinary work: firstmate can refresh the synthetic token
+Handled while away:
+  (no routine outcomes recorded in the store for this window)
+Cost: 0 supervision outcome(s) recorded (0 routine, 0 captain); 3 task(s) live at return.
+fm-afk-return: catch-up must finish before the captain request
+catch-up health: GAP: the away daemon was not running at return (the away flag stood with no live daemon)
+catch-up health: GAP: the watcher beat was 999999s old at return (grace 300s)
+catch-up wake: STATUS OUTCOME BACKSTOP (newest captain-facing task event has no covering branch outcome):
+catch-up wake: landed done: PR https://example.invalid/pr/1 checks green
+catch-up wake: mate done: an unrelated routed concern finished
+catch-up wake: OPEN DECISIONS (still open, folded from the durable status logs - not just the latest line):
+catch-up wake: mate [key=creds] blocked: the mate needs a credential
+catch-up wake: repair-task [key=token] blocked: firstmate can refresh the synthetic token
+catch-up wake: OPEN DECISIONS: close one by answering it: bin/fm-send.sh <task> --resolve-key <key> '<answer>'
+firstmate-actionable blocker: mate [key=creds] the mate needs a credential
+firstmate-actionable blocker: repair-task [key=token] firstmate can refresh the synthetic token
+fm-afk-return: handle each blocker now, or close it with resolved [key=...] and append a durable reclassification reason, then run bin/fm-afk-return.sh check
+rc=3
+
+----- state/.afk-return-catchup (non-evidence rows) -----
+schema	fm-afk-return.v1
+started	1789503012
+phase	blocked
+window	1789502994
+blocker	mate	creds	the mate needs a credential
+blocker	repair-task	token	firstmate can refresh the synthetic token
