@@ -31,8 +31,7 @@ For technical questions, known problems, or potential solutions, search the Unif
 bin/fm-unified-library.sh search "<issue>"
 ```
 
-Prefer verified cards.
-Use `--verified-only` when you need to know whether a verified card exists.
+Prefer verified cards; the library CLI already orders them first.
 If the adapter reports `verified_finding: no verified relevant card`, do not invent a verified card.
 Treat draft cards as prior art, not truth or authority.
 
@@ -74,5 +73,4 @@ Record whether it worked, failed, was mixed, or remains unknown:
 bin/fm-unified-library.sh record-outcome <CARD-ID> {worked|failed|mixed|unknown} --evidence "<what happened>"
 ```
 
-That receipt stays in this Firstmate home.
-Publishing the same outcome into the OSBAMBAM catalog is a library-owner write, not an adapter write.
+The adapter prints the OSBAMBAM library-owner command for that outcome and does not execute it; run the printed command so the outcome lands in the shared library where `trace` can see it.

@@ -4,14 +4,13 @@
 # This is a thin read-only adapter. It does not copy, index, or store OSBAMBAM
 # cards, sources, memory, or backlog state. Search, open, and trace call the
 # existing OSBAMBAM library CLI. Recall calls the existing brain.js memory
-# helper. Application receipts are recorded locally under this Firstmate home.
-# Intake, promotion, and library-catalog writes stay with the OSBAMBAM
+# helper. Intake, promotion, and outcome writes stay with the OSBAMBAM
 # Librarian/library owner; this adapter prints those commands and refuses to
 # execute them.
 #
 # Usage:
-#   fm-unified-library.sh recall "<query>" [--k 3]
-#   fm-unified-library.sh search "<issue>" [--limit 3] [--verified-only]
+#   fm-unified-library.sh recall "<query>"
+#   fm-unified-library.sh search "<issue>" [--limit 3]
 #   fm-unified-library.sh open <CARD-ID> [--budget 4000]
 #   fm-unified-library.sh trace <CARD-ID>
 #   fm-unified-library.sh record-outcome <CARD-ID> {worked|failed|mixed|unknown}
@@ -25,20 +24,18 @@
 #                          directory exists.
 #   FM_UNIFIED_LIBRARY_PY  Override path to library.py (tests).
 #   FM_BRAIN_JS            Override path to brain.js (tests).
-#   FM_HOME                Firstmate home for local outcome receipts.
-#   FM_DATA_OVERRIDE       Test override for data/.
 #
-# Search never requests more than three cards. Verified cards are preferred.
-# When a search returns no verified card, the adapter reports that finding
-# instead of inventing one. Draft cards remain prior art, not authority.
+# Search never requests more than three cards. The library CLI already orders
+# verified cards first. When a search returns no verified card, the adapter
+# reports that finding instead of inventing one. Draft cards remain prior art,
+# not authority. record-outcome prints the library-owner command for the
+# outcome rather than writing a local receipt.
 # The script header owns these exact flags and paths; the unified-library
 # skill owns when to load this adapter and how to treat the results.
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DEFAULT_OSBAMBAM_ROOT="/Users/brycemajdick/Desktop/OSBAMBAM"
 SEARCH_LIMIT_MAX=3
-RECALL_K_MAX=3
 OPEN_BUDGET_DEFAULT=4000
 
 die() { printf 'error: %s\n' "$1" >&2; exit 2; }
@@ -50,14 +47,6 @@ usage() {
     { exit }
   ' "${BASH_SOURCE[0]}"
   exit "${1:-2}"
-}
-
-resolve_home() {
-  if [ -n "${FM_HOME:-}" ]; then
-    printf '%s\n' "$FM_HOME"
-    return 0
-  fi
-  (cd "$SCRIPT_DIR/.." && pwd)
 }
 
 resolve_osbambam_root() {
@@ -112,26 +101,20 @@ cap_int() {
 }
 
 print_writes() {
-  local library_py brain_js data_dir librarian_py
-  library_py=$(resolve_library_py)
-  brain_js=$(resolve_brain_js)
-  librarian_py="$OSBAMBAM_ROOT/os/scripts/librarian.py"
-  data_dir="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
+  local librarian_py="$OSBAMBAM_ROOT/os/scripts/librarian.py"
   cat <<EOF
 This adapter does not write OSBAMBAM.
 It does not copy cards, sources, memory, or backlog state.
 Route source-linked research intake through the Librarian owner:
   python3 $librarian_py research <path>
 Route source registration through the library owner:
-  python3 $library_py intake <path>
+  python3 $LIBRARY_PY intake <path>
 Promote a card only through the library owner after its source locator, applicability, and cheapest rejection test are checked:
-  python3 $library_py card-status <CARD-ID> verified --evidence <text>
-Publish a catalog outcome through the library owner:
-  python3 $library_py record-outcome <CARD-ID> {worked|failed|mixed|unknown}
-Local application receipts stay in this Firstmate home:
-  $data_dir/unified-library-outcomes.jsonl
+  python3 $LIBRARY_PY card-status <CARD-ID> verified --evidence <text>
+Record an application outcome through the library owner:
+  python3 $LIBRARY_PY record-outcome <CARD-ID> {worked|failed|mixed|unknown} [--evidence <text>] [--run-id <id>]
 Memory recall remains read-only:
-  node $brain_js recall "<query>" --k 3
+  node $BRAIN_JS recall "<query>"
 EOF
 }
 
@@ -141,7 +124,6 @@ import json
 import sys
 
 limit = int(sys.argv[1])
-verified_only = sys.argv[2] == "1"
 raw = sys.stdin.read()
 try:
     data = json.loads(raw)
@@ -167,23 +149,16 @@ data["adapter"] = {
     "cards_are_not_authority_over_domain_gates": True,
     "drafts_are_prior_art": True,
     "limit": limit,
-    "verified_only": verified_only,
 }
 json.dump(data, sys.stdout, indent=2, ensure_ascii=False, sort_keys=True)
 sys.stdout.write("\n")
-' "$1" "$2"
+' "$1"
 }
 
 cmd_recall() {
-  local query="" k=3
+  local query=""
   while [ "$#" -gt 0 ]; do
     case "$1" in
-      --k)
-        [ -n "${2-}" ] || die "--k needs a value"
-        k=$(parse_positive_int "$2" "--k")
-        k=$(cap_int "$k" "$RECALL_K_MAX")
-        shift 2
-        ;;
       --help|-h) usage 0 ;;
       --*) die "unknown recall option: $1" ;;
       *)
@@ -196,11 +171,11 @@ cmd_recall() {
   [ -n "$query" ] || die "recall needs a query"
   require_file "$BRAIN_JS" "brain.js"
   command -v node >/dev/null 2>&1 || die "node is required for recall"
-  node "$BRAIN_JS" recall "$query" --k "$k"
+  node "$BRAIN_JS" recall "$query"
 }
 
 cmd_search() {
-  local query="" limit="$SEARCH_LIMIT_MAX" verified_only=0
+  local query="" limit="$SEARCH_LIMIT_MAX"
   while [ "$#" -gt 0 ]; do
     case "$1" in
       --limit)
@@ -208,10 +183,6 @@ cmd_search() {
         limit=$(parse_positive_int "$2" "--limit")
         limit=$(cap_int "$limit" "$SEARCH_LIMIT_MAX")
         shift 2
-        ;;
-      --verified-only)
-        verified_only=1
-        shift
         ;;
       --help|-h) usage 0 ;;
       --*) die "unknown search option: $1" ;;
@@ -225,20 +196,16 @@ cmd_search() {
   [ -n "$query" ] || die "search needs an issue"
   require_file "$LIBRARY_PY" "library.py"
   command -v python3 >/dev/null 2>&1 || die "python3 is required for search"
-  local -a args=(search "$query" --limit "$limit")
-  if [ "$verified_only" -eq 1 ]; then
-    args+=(--statuses verified)
-  fi
   local out rc=0
   set +e
-  out=$(python3 "$LIBRARY_PY" "${args[@]}")
+  out=$(python3 "$LIBRARY_PY" search "$query" --limit "$limit")
   rc=$?
   set -e
   if [ "$rc" -ne 0 ]; then
     printf '%s\n' "$out"
     exit "$rc"
   fi
-  printf '%s\n' "$out" | annotate_search "$limit" "$verified_only"
+  printf '%s\n' "$out" | annotate_search "$limit"
 }
 
 cmd_open() {
@@ -315,30 +282,13 @@ cmd_record_outcome() {
     worked|failed|mixed|unknown) ;;
     *) die "outcome must be worked, failed, mixed, or unknown" ;;
   esac
-  command -v python3 >/dev/null 2>&1 || die "python3 is required for record-outcome"
-  local data_dir receipt
-  data_dir="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
-  mkdir -p "$data_dir"
-  receipt="$data_dir/unified-library-outcomes.jsonl"
-  python3 -c '
-import json
-import sys
-from datetime import datetime, timezone
-
-card_id, outcome, evidence, run_id, path = sys.argv[1:6]
-record = {
-    "card_id": card_id,
-    "evidence": evidence,
-    "outcome": outcome,
-    "recorded_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-    "run_id": run_id or None,
-    "store": "firstmate-local",
-}
-with open(path, "a", encoding="utf-8") as handle:
-    handle.write(json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n")
-json.dump(record, sys.stdout, indent=2, ensure_ascii=False, sort_keys=True)
-sys.stdout.write("\n")
-' "$card_id" "$outcome" "$evidence" "$run_id" "$receipt"
+  local -a owner_cmd=(python3 "$LIBRARY_PY" record-outcome "$card_id" "$outcome")
+  [ -z "$evidence" ] || owner_cmd+=(--evidence "$evidence")
+  [ -z "$run_id" ] || owner_cmd+=(--run-id "$run_id")
+  local rendered
+  rendered=$(printf '%q ' "${owner_cmd[@]}")
+  printf 'Outcome %s for %s is a library-owner write; this adapter does not execute it.\n' "$outcome" "$card_id"
+  printf 'Record it through the library owner:\n  %s\n' "${rendered% }"
 }
 
 bind_osbambam() {
@@ -359,7 +309,6 @@ bind_osbambam_soft() {
   BRAIN_JS="$(resolve_brain_js)"
 }
 
-FM_HOME="$(resolve_home)"
 OSBAMBAM_ROOT=
 LIBRARY_PY=
 BRAIN_JS=
@@ -371,13 +320,12 @@ case "$1" in
   search) bind_osbambam; shift; cmd_search "$@" ;;
   open) bind_osbambam; shift; cmd_open "$@" ;;
   trace) bind_osbambam; shift; cmd_trace "$@" ;;
-  record-outcome) shift; cmd_record_outcome "$@" ;;
+  record-outcome) bind_osbambam_soft; shift; cmd_record_outcome "$@" ;;
   writes) bind_osbambam_soft; print_writes ;;
-  intake|ingest|card-status|apply-card-draft|import-stage-card|seed-grok|init|rebuild|snapshot|index|quarantine|restore|purge-ready|duplicates)
+  *)
     bind_osbambam_soft
-    printf 'error: %s is an OSBAMBAM library write; this adapter refuses it\n' "$1" >&2
+    printf 'error: unknown command: %s\n' "$1" >&2
     print_writes >&2
     exit 2
     ;;
-  *) die "unknown command: $1" ;;
 esac

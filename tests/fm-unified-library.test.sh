@@ -8,19 +8,16 @@ set -u
 
 ADAPTER="$ROOT/bin/fm-unified-library.sh"
 TMP_ROOT=$(fm_test_tmproot fm-unified-library)
-HOME_DIR="$TMP_ROOT/home"
 OSBAMBAM="$TMP_ROOT/osbambam"
 FAKEBIN="$TMP_ROOT/fakebin"
 CALLS="$TMP_ROOT/calls"
 LIBRARY_PY="$OSBAMBAM/os/scripts/library.py"
 BRAIN_JS="$OSBAMBAM/rubric-second-brain/brain.js"
-DATA_DIR="$HOME_DIR/data"
 
 assert_present "$ADAPTER" "bin/fm-unified-library.sh is missing"
 [ -x "$ADAPTER" ] || fail "bin/fm-unified-library.sh must be executable"
 
-mkdir -p "$HOME_DIR" "$OSBAMBAM/os/scripts" "$OSBAMBAM/rubric-second-brain" \
-  "$FAKEBIN" "$DATA_DIR"
+mkdir -p "$OSBAMBAM/os/scripts" "$OSBAMBAM/rubric-second-brain" "$FAKEBIN"
 : >"$CALLS"
 
 cat >"$LIBRARY_PY" <<'PY'
@@ -36,18 +33,13 @@ if calls:
 
 command = sys.argv[1] if len(sys.argv) > 1 else ""
 if command == "search":
-    statuses = "verified,draft"
-    if "--statuses" in sys.argv:
-        statuses = sys.argv[sys.argv.index("--statuses") + 1]
     query = sys.argv[2]
-    if "verified-hit" in query and "verified" in statuses.split(","):
+    if "verified-hit" in query:
         cards = [{
             "card_id": "CARD-VERIFIED-1",
             "status": "verified",
             "title": "Verified hit",
         }]
-    elif "verified" in statuses.split(",") and "draft" not in statuses.split(","):
-        cards = []
     else:
         cards = [{
             "card_id": "CARD-DRAFT-1",
@@ -79,7 +71,7 @@ const calls = process.env.FM_UL_CALLS;
 if (calls) {
   require("fs").appendFileSync(calls, args.join(" ") + "\n");
 }
-process.stdout.write(JSON.stringify({command: args[0], query: args[1], k: args[3]}) + "\n");
+process.stdout.write(JSON.stringify({command: args[0], query: args[1]}) + "\n");
 JS
 
 cat >"$FAKEBIN/node" <<'SH'
@@ -97,18 +89,16 @@ calls = os.environ.get("FM_UL_CALLS")
 if calls:
     with open(calls, "a", encoding="utf-8") as handle:
         handle.write(" ".join(args) + "\n")
-print(json.dumps({"command": args[0], "query": args[1], "k": args[3] if len(args) > 3 else None}))
+print(json.dumps({"command": args[0], "query": args[1], "extra": args[2:]}))
 PY
 SH
 chmod +x "$FAKEBIN/node"
 
 run_adapter() {
   PATH="$FAKEBIN:$PATH" \
-    FM_HOME="$HOME_DIR" \
     FM_OSBAMBAM_ROOT="$OSBAMBAM" \
     FM_UNIFIED_LIBRARY_PY="$LIBRARY_PY" \
     FM_BRAIN_JS="$BRAIN_JS" \
-    FM_DATA_OVERRIDE="$DATA_DIR" \
     FM_UL_CALLS="$CALLS" \
     "$ADAPTER" "$@"
 }
@@ -116,7 +106,7 @@ run_adapter() {
 test_help_does_not_need_osbambam() {
   local out rc
   set +e
-  out=$(FM_HOME="$HOME_DIR" "$ADAPTER" --help 2>&1)
+  out=$("$ADAPTER" --help 2>&1)
   rc=$?
   set -e
   expect_code 0 "$rc" "help without OSBAMBAM"
@@ -150,21 +140,32 @@ test_search_caps_limit_at_three() {
   pass "search never requests more than three cards"
 }
 
-test_search_verified_only_and_verified_hit() {
+test_search_rejects_unknown_option() {
+  local out rc
+  : >"$CALLS"
+  set +e
+  out=$(run_adapter search "verified-hit adapter" --verified-only 2>&1)
+  rc=$?
+  set -e
+  expect_code 2 "$rc" "search --verified-only"
+  assert_contains "$out" "unknown search option: --verified-only" \
+    "search accepted a status filter it no longer owns"
+  [ ! -s "$CALLS" ] || fail "rejected search option still invoked library.py"
+  pass "search has no status filter that could hide draft prior art"
+}
+
+test_search_marks_verified_hit() {
   local out
   : >"$CALLS"
-  out=$(run_adapter search "verified-hit adapter" --verified-only)
-  assert_grep "search verified-hit adapter --limit 3 --statuses verified" "$CALLS" \
-    "verified-only search did not pass --statuses verified"
+  out=$(run_adapter search "verified-hit adapter")
+  assert_grep "search verified-hit adapter --limit 3" "$CALLS" \
+    "verified hit search passed extra arguments to library.py"
   assert_contains "$out" '"verified_present": true' \
     "verified hit was not marked present"
+  assert_contains "$out" '"verified_count": 1' "verified hit was not counted"
   assert_not_contains "$out" "no verified relevant card" \
     "verified hit still reported no verified card"
-  : >"$CALLS"
-  out=$(run_adapter search "adapter lookup contract" --verified-only)
-  assert_contains "$out" '"verified_finding": "no verified relevant card"' \
-    "empty verified-only search did not keep the no-verified-card finding"
-  pass "verified-only search preserves the verified versus absent distinction"
+  pass "search marks a verified hit without a status filter"
 }
 
 test_open_and_trace_passthrough() {
@@ -182,27 +183,38 @@ test_open_and_trace_passthrough() {
 }
 
 test_recall_uses_brain_js() {
-  local out
+  local out rc
   : >"$CALLS"
   out=$(run_adapter recall "Bryce decisions preferences")
   assert_contains "$out" '"command": "recall"' "recall did not invoke brain.js recall"
-  assert_grep "recall Bryce decisions preferences --k 3" "$CALLS" \
-    "recall did not pass --k 3"
-  pass "recall queries OSBAMBAM memory through brain.js"
+  [ "$(cat "$CALLS")" = "recall Bryce decisions preferences" ] \
+    || fail "recall did not pass the query alone to brain.js: $(cat "$CALLS")"
+  set +e
+  out=$(run_adapter recall "Bryce decisions preferences" --k 5 2>&1)
+  rc=$?
+  set -e
+  expect_code 2 "$rc" "recall --k"
+  assert_contains "$out" "unknown recall option: --k" "recall accepted a hit-count override"
+  pass "recall queries OSBAMBAM memory through brain.js with its default hit count"
 }
 
-test_record_outcome_stays_local() {
-  local out receipt
+test_record_outcome_prints_owner_command() {
+  local out rc
   : >"$CALLS"
-  receipt="$DATA_DIR/unified-library-outcomes.jsonl"
-  rm -f "$receipt"
-  out=$(run_adapter record-outcome CARD-DRAFT-1 mixed --evidence "draft prior art used, not authority")
-  assert_contains "$out" '"outcome": "mixed"' "record-outcome did not echo mixed"
-  assert_contains "$out" '"store": "firstmate-local"' "record-outcome did not mark the local store"
-  assert_present "$receipt" "record-outcome did not write a local receipt"
-  assert_grep '"outcome": "mixed"' "$receipt" "local receipt omitted the outcome"
+  out=$(run_adapter record-outcome CARD-DRAFT-1 mixed --evidence "draft prior art used" --run-id run-7)
+  assert_contains "$out" "python3 $LIBRARY_PY record-outcome CARD-DRAFT-1 mixed" \
+    "record-outcome did not print the library-owner command"
+  assert_contains "$out" "mixed --evidence draft\\ prior\\ art\\ used --run-id run-7" \
+    "record-outcome dropped or mangled the evidence and run id in the owner command"
   [ ! -s "$CALLS" ] || fail "record-outcome invoked the OSBAMBAM library CLI"
-  pass "application receipts stay in the Firstmate home"
+  set +e
+  out=$(run_adapter record-outcome CARD-DRAFT-1 partly 2>&1)
+  rc=$?
+  set -e
+  expect_code 2 "$rc" "record-outcome invalid outcome"
+  assert_contains "$out" "outcome must be worked, failed, mixed, or unknown" \
+    "record-outcome accepted an outcome the owner rejects"
+  pass "record-outcome routes the outcome to the library owner without a local store"
 }
 
 test_writes_are_refused() {
@@ -213,18 +225,29 @@ test_writes_are_refused() {
   rc=$?
   set -e
   expect_code 2 "$rc" "intake refusal"
-  assert_contains "$out" "this adapter refuses it" "intake was not refused"
+  assert_contains "$out" "unknown command: intake" "intake was not refused"
   assert_contains "$out" "librarian.py research" "refusal omitted Librarian research intake"
   assert_contains "$out" "library.py intake" "refusal omitted library intake"
+  assert_contains "$out" "library.py record-outcome" "refusal omitted the outcome owner command"
   [ ! -s "$CALLS" ] || fail "refused write still invoked library.py"
+  : >"$CALLS"
+  set +e
+  out=$(run_adapter purge-ready 2>&1)
+  rc=$?
+  set -e
+  expect_code 2 "$rc" "purge-ready refusal"
+  assert_contains "$out" "unknown command: purge-ready" "unlisted owner verb was not refused"
+  assert_contains "$out" "library.py intake" "unlisted owner verb refusal omitted owner guidance"
+  [ ! -s "$CALLS" ] || fail "refused unlisted verb still invoked library.py"
   pass "library writes stay with the OSBAMBAM owner"
 }
 
 test_help_does_not_need_osbambam
 test_search_reports_no_verified_card
 test_search_caps_limit_at_three
-test_search_verified_only_and_verified_hit
+test_search_rejects_unknown_option
+test_search_marks_verified_hit
 test_open_and_trace_passthrough
 test_recall_uses_brain_js
-test_record_outcome_stays_local
+test_record_outcome_prints_owner_command
 test_writes_are_refused
