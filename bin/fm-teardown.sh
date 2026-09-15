@@ -200,12 +200,13 @@
 # delete, or backend kill below - a still-active run or a leaked process may
 # own live work in that worktree). A landed-work refusal that retains a task
 # whose own worker has already concluded (bin/fm-classify-lib.sh's
-# status_task_concluded) does NOT run this sequence: it closes only the
-# recorded endpoint, and only when no parked run of the task's own is waiting
-# on that worker - the copy, its work, every durable record, the parked run,
-# and every process rooted in the retained copy stay - so a finished worker
-# never keeps running because its cleanup is waiting on the captain
-# (stop_concluded_worker_for_refusal):
+# status_task_concluded) does NOT run this sequence: it stops only the agent,
+# through the control plane's own `exit` mechanics so the endpoint stays
+# relaunchable, and only when no-mistakes proves no run of the task's own
+# still needs that worker - the endpoint, the copy, its work, every durable
+# record, any parked or unproven run, and every process rooted in the
+# retained copy stay - so a finished worker never keeps running because its
+# cleanup is waiting on the captain (stop_concluded_worker_for_refusal):
 #   Fix 1 - conclude the task's own no-mistakes run. A ship task's worktree can
 #     be torn down while its no-mistakes pipeline run is still PARKED at a gate
 #     (awaiting_approval/fix_review/any awaiting_agent field), with no worker
@@ -1662,95 +1663,101 @@ teardown_treehouse_return() {
   return 1
 }
 
-# Whether this task's Herdr presentation journal names exactly the recorded
-# endpoint's workspace (read-only; sets HERDR_PRESENTATION_* for the close).
-# The journal never authorizes anything by itself - see the script header.
-HERDR_PRESENTATION_JOURNAL=
-HERDR_PRESENTATION_RETIRE_CANDIDATE=0
-HERDR_PRESENTATION_SESSION=
-HERDR_PRESENTATION_PANE=
-herdr_presentation_retire_candidate_read() {
-  HERDR_PRESENTATION_JOURNAL="$STATE/$ID.herdr-presentation"
-  HERDR_PRESENTATION_RETIRE_CANDIDATE=0
-  HERDR_PRESENTATION_SESSION=
-  HERDR_PRESENTATION_PANE=
-  [ "$BACKEND" = herdr ] || return 1
-  { [ -e "$HERDR_PRESENTATION_JOURNAL" ] || [ -L "$HERDR_PRESENTATION_JOURNAL" ]; } || return 1
-  fm_backend_source herdr || true
-  HERDR_PRESENTATION_SESSION=$(meta_value "$META" herdr_session)
-  HERDR_PRESENTATION_WORKSPACE=$(meta_value "$META" herdr_workspace_id)
-  HERDR_PRESENTATION_PANE=$(meta_value "$META" herdr_pane_id)
-  if [ -n "$HERDR_PRESENTATION_SESSION" ] \
-     && [ -n "$HERDR_PRESENTATION_WORKSPACE" ] \
-     && [ -n "$HERDR_PRESENTATION_PANE" ] \
-     && [ "$T" = "$HERDR_PRESENTATION_SESSION:$HERDR_PRESENTATION_PANE" ] \
-     && fm_backend_herdr_projection_endpoint_matches_journal \
-       "$HERDR_PRESENTATION_SESSION" "$HERDR_PRESENTATION_WORKSPACE" \
-       "$HERDR_PRESENTATION_JOURNAL" "$ID"; then
-    HERDR_PRESENTATION_RETIRE_CANDIDATE=1
+# Whether this task's own no-mistakes run still needs its worker, read for a
+# refusal that would otherwise stop that worker. Unlike the completed path's
+# fail-open attribution (a query failure there only skips an abort of a
+# worktree that is being removed anyway), a retaining refusal needs proof
+# before it stops anything: 0 only when the run is proven not to need the
+# worker (no-mistakes absent, the project not initialized for it, this
+# branch's run terminal, or the current-branch run belonging to another
+# branch), 1 when this branch's run is parked at a gate or still under way
+# (TASK_RUN_ID names it), 2 when the query timed out, failed, or answered
+# with nothing this reader can classify.
+refusal_run_needs_worker() {  # <worktree> -> 0 no, 1 yes, 2 cannot tell
+  local wt=$1 out branch run_id run_branch status outcome awaiting has_gate
+  TASK_RUN_ID=
+  [ "$KIND" = ship ] || return 0
+  command -v no-mistakes >/dev/null 2>&1 || return 0
+  branch=$(git -C "$wt" symbolic-ref --quiet --short HEAD 2>/dev/null) || return 2
+  [ -n "$branch" ] || return 2
+  if ! out=$(fm_nm_run_bounded "$wt" "$NM_TEARDOWN_TIMEOUT" axi status 2>&1); then
+    case "$(fm_nm_trim "$out")" in
+      'error: repo not initialized'*) return 0 ;;
+    esac
+    return 2
   fi
-  [ "$HERDR_PRESENTATION_RETIRE_CANDIDATE" = 1 ]
+  run_id=$(fm_nm_strip_quotes "$(fm_nm_field "$out" id)")
+  [ -n "$run_id" ] || return 2
+  run_branch=$(fm_nm_strip_quotes "$(fm_nm_field "$out" branch)")
+  [ "$run_branch" = "$branch" ] || return 0
+  outcome=$(fm_nm_strip_quotes "$(fm_nm_field "$out" outcome)")
+  [ -z "$outcome" ] || return 0
+  status=$(fm_nm_strip_quotes "$(fm_nm_field "$out" status)")
+  case "$status" in
+    completed|failed|cancelled|passed|checks-passed) return 0 ;;
+    awaiting_approval|fix_review|running|fixing|ci) TASK_RUN_ID=$run_id; return 1 ;;
+  esac
+  awaiting=$(printf '%s\n' "$out" | grep -E '^[[:space:]]*awaiting_agent:' | head -1 || true)
+  has_gate=$(printf '%s\n' "$out" | grep -Eq '^[[:space:]]*gate:[[:space:]]*' && echo 1 || echo 0)
+  if [ -n "$awaiting" ] || [ "$has_gate" = 1 ]; then
+    TASK_RUN_ID=$run_id
+    return 1
+  fi
+  return 2
 }
 
 # A refusal that keeps the isolated copy for the captain's decision must not
-# keep the finished worker running in it. When the task's own worker has
+# keep the finished worker running in it, and must not destroy the endpoint
+# the captain's other answer needs: a relaunch (bin/fm-control.sh relaunch,
+# bin/fm-spawn.sh --relaunch) puts its replacement into the SAME endpoint and
+# requires it to read exactly `dead`. So when the task's own worker has
 # concluded (bin/fm-classify-lib.sh's status_task_concluded), the refusal
-# closes only the recorded endpoint - through the same locked close a
-# completed teardown ends with - while the copy, its commits and uncommitted
-# changes, and every durable record stay. Nothing else of the pre-teardown
-# cleanup sequence runs at a refusal: a parked no-mistakes run is never
-# aborted (the worker is retained to answer its gate), and no process rooted
-# in the retained worktree is reaped, because that copy is exactly what the
-# captain may be inspecting. The outcome line reports the endpoint state
-# actually observed, never the attempt: an endpoint already gone is named as
-# such, a backend that cannot classify its endpoint reports the close as
-# unconfirmed, and a refused or failed close names the endpoint and leaves
-# the backend's own reason on stderr. A worker that is still live is never
-# stopped by a refusal.
+# stops the AGENT the way the control plane's `exit` verb does - the harness
+# exit command typed into the endpoint and the endpoint's recovery-grade
+# classifier read until it reports the agent gone - by delegating to
+# bin/fm-control.sh itself, which owns those mechanics and every guard around
+# them (busy interrupt first, composer must be empty, backends without a
+# classifier refuse). Teardown hands over its task control lock and lease
+# guard for that call: nothing destructive follows a refusal, and the
+# control plane must hold the same lock it always holds. The endpoint, the
+# copy, its commits and uncommitted changes, and every durable record stay.
+# Nothing of the pre-teardown cleanup sequence runs here: a parked or active
+# run is never aborted (its worker is retained to answer it, and a run whose
+# state cannot be proven counts as needing the worker), and no process rooted
+# in the retained copy is reaped. Every retained outcome says why; a stop is
+# claimed only from the control plane's own verified postcondition.
 stop_concluded_worker_for_refusal() {
-  local state session pane
+  local state verdict out
   status_task_concluded "$STATE/$ID.status" "$META" || return 0
-  [ "$BACKEND" != orca ] || [ -n "$T_ORCA" ] || return 0
-  if [ "$KIND" = ship ] && command -v no-mistakes >/dev/null 2>&1 \
-     && task_run_is_own_parked_run "$WT"; then
-    echo "The finished worker at $T is retained: its no-mistakes run $TASK_RUN_ID is parked at a gate this worker answers, and a refusal never aborts a run." >&2
-    return 0
-  fi
-  state=$(fm_backend_agent_state "$BACKEND" "$T")
-  case "$state" in
-    dead|missing)
-      echo "The finished worker at $T is already gone (endpoint state: $state); the worktree, its work, and the task record are retained." >&2
+  refusal_run_needs_worker "$WT" && verdict=0 || verdict=$?
+  case "$verdict" in
+    1)
+      echo "The finished worker at $T is retained: its no-mistakes run $TASK_RUN_ID still needs it (parked at a gate or under way), and a refusal never aborts a run." >&2
+      return 0
+      ;;
+    2)
+      echo "The finished worker at $T is retained: no-mistakes could not prove that no run of this task's own still needs it (status unavailable, timed out, or unrecognized); rerun teardown once no-mistakes answers." >&2
       return 0
       ;;
   esac
-  if [ "$BACKEND" = herdr ]; then
-    if teardown_herdr_preflight_target "$T" "$ID"; then
-      session=$FM_BACKEND_HERDR_SESSION
-      pane=$FM_BACKEND_HERDR_PANE
-      if herdr_presentation_retire_candidate_read; then
-        fm_backend_herdr_projection_close_pane_focus_preserving "$session" "$pane" || true
-        if [ "$(fm_backend_herdr_pane_agent_state "$session" "$pane")" = dead ]; then
-          rm -f "$HERDR_PRESENTATION_JOURNAL"
-        fi
-      else
-        fm_backend_herdr_kill_serialized "$session" "$pane" || true
-      fi
-    fi
-  else
-    fm_backend_kill "$BACKEND" "$T" "$(meta_value "$META" zellij_tab_id)" "fm-$ID" || true
-  fi
   state=$(fm_backend_agent_state "$BACKEND" "$T")
   case "$state" in
     dead|missing)
-      echo "Stopped the finished worker at $T; the worktree, its work, and the task record are retained." >&2
-      ;;
-    unverified)
-      echo "Close requested for the finished worker at $T; the $BACKEND backend cannot classify its endpoint state, so the stop is unconfirmed. The worktree, its work, and the task record are retained." >&2
-      ;;
-    *)
-      echo "warning: the finished worker at $T could not be confirmed stopped (endpoint state: $state); it may still be running - stop it with bin/fm-control.sh $ID exit, or rerun teardown once the close can run." >&2
+      echo "The finished worker at $T is already stopped (endpoint state: $state); the endpoint, the worktree, its work, and the task record are retained." >&2
+      return 0
       ;;
   esac
+  fm_lease_guard_release || true
+  if [ "$CONTROL_LOCK_HELD" = 1 ]; then
+    fm_lock_release "$CONTROL_LOCK" || true
+    CONTROL_LOCK_HELD=0
+  fi
+  if out=$(FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" FM_DATA_OVERRIDE="$DATA" \
+      FM_CONFIG_OVERRIDE="$CONFIG" "$SCRIPT_DIR/fm-control.sh" "$ID" exit); then
+    echo "Stopped the finished worker's agent at $T (fm-control exit: $out); its endpoint, the worktree, its work, and the task record are retained for a relaunch or a discard." >&2
+  else
+    echo "warning: the finished worker at $T is retained because it could not be stopped in place (bin/fm-control.sh $ID exit refused or failed; its reason is above). Stop it with that command once the cause is cleared." >&2
+  fi
 }
 
 # A held task is what keeps a refused, finished task from re-surfacing as
@@ -3457,7 +3464,26 @@ elif [ -d "$WT" ] && [ "$KIND" != secondmate ]; then
   fm_treehouse_slot_owner_release "$WT" "$ID"
 fi
 
-herdr_presentation_retire_candidate_read || true
+HERDR_PRESENTATION_JOURNAL="$STATE/$ID.herdr-presentation"
+HERDR_PRESENTATION_RETIRE_CANDIDATE=0
+HERDR_PRESENTATION_SESSION=
+HERDR_PRESENTATION_PANE=
+if [ "$BACKEND" = herdr ] \
+   && { [ -e "$HERDR_PRESENTATION_JOURNAL" ] || [ -L "$HERDR_PRESENTATION_JOURNAL" ]; }; then
+  fm_backend_source herdr || true
+  HERDR_PRESENTATION_SESSION=$(meta_value "$META" herdr_session)
+  HERDR_PRESENTATION_WORKSPACE=$(meta_value "$META" herdr_workspace_id)
+  HERDR_PRESENTATION_PANE=$(meta_value "$META" herdr_pane_id)
+  if [ -n "$HERDR_PRESENTATION_SESSION" ] \
+     && [ -n "$HERDR_PRESENTATION_WORKSPACE" ] \
+     && [ -n "$HERDR_PRESENTATION_PANE" ] \
+     && [ "$T" = "$HERDR_PRESENTATION_SESSION:$HERDR_PRESENTATION_PANE" ] \
+     && fm_backend_herdr_projection_endpoint_matches_journal \
+       "$HERDR_PRESENTATION_SESSION" "$HERDR_PRESENTATION_WORKSPACE" \
+       "$HERDR_PRESENTATION_JOURNAL" "$ID"; then
+    HERDR_PRESENTATION_RETIRE_CANDIDATE=1
+  fi
+fi
 
 if [ "$HERDR_PRESENTATION_RETIRE_CANDIDATE" = 1 ]; then
   # The presentation lock was acquired before the worktree return above; a
