@@ -1171,13 +1171,21 @@ test_dirty_worktree_refuses() {
   pass "dirty worktree is refused even when its committed work has landed (dirty always wins), and the refusal names the hold that bounds the wait"
 }
 
-# Record every tmux invocation so a test can prove whether the task's window
-# was closed. Args: case_dir
+# A stateful tmux fake: the task window shows a live claude agent until
+# kill-window closes it, after which the window is gone from the inventory.
+# Every invocation is logged so a test can prove whether the window was
+# closed. Args: case_dir
 add_logging_tmux() {
   local case_dir=$1
   cat > "$case_dir/fakebin/tmux" <<SH
 #!/usr/bin/env bash
 printf '%s\n' "\$*" >> "$case_dir/tmux.log"
+case "\${1:-}" in
+  kill-window) : > "$case_dir/tmux.killed" ;;
+  list-windows) [ -e "$case_dir/tmux.killed" ] || printf 'fm-task-x1\n' ;;
+  display-message)
+    case "\$*" in *pane_current_command*) [ -e "$case_dir/tmux.killed" ] || printf 'claude\n' ;; esac ;;
+esac
 exit 0
 SH
   chmod +x "$case_dir/fakebin/tmux"
@@ -1271,11 +1279,10 @@ test_dirty_worktree_refusal_reports_a_worker_it_could_not_stop() {
 }
 
 # Every refusal that retains a concluded task's copy stops its finished worker
-# and reaps its leaked descendants the way a completed teardown does, while
-# the unlanded commits stay exactly where they were: here the no-mistakes
-# unpushed-and-not-landed refusal, with a disowned process rooted under the
-# worktree.
-test_unlanded_refusal_stops_a_concluded_worker_and_reaps_its_leak() {
+# surface and nothing else: here the no-mistakes unpushed-and-not-landed
+# refusal, with a disowned process rooted under the worktree that must survive
+# because the retained copy is what the captain may be inspecting.
+test_unlanded_refusal_stops_a_concluded_worker_and_keeps_its_worktree_processes() {
   local case_dir rc head pid
   case_dir=$(make_case unlanded-concluded)
   write_meta "$case_dir" no-mistakes ship
@@ -1298,10 +1305,10 @@ test_unlanded_refusal_stops_a_concluded_worker_and_reaps_its_leak() {
   expect_code 1 "$rc" "unlanded-concluded: teardown should still refuse unlanded work"
   grep -q "REFUSED: worktree .* has work not on any remote and not landed" "$case_dir/stderr" \
     || fail "unlanded-concluded: refusal did not cite unlanded work: $(cat "$case_dir/stderr")"
-  if kill -0 "$pid" 2>/dev/null; then
-    kill -KILL "$pid" 2>/dev/null || true
-    fail "unlanded-concluded: the leaked worktree process survived the refusal"
+  if ! kill -0 "$pid" 2>/dev/null; then
+    fail "unlanded-concluded: a refusal reaped a process rooted in the retained worktree: $(cat "$case_dir/stderr")"
   fi
+  kill -KILL "$pid" 2>/dev/null || true
   grep -Fq "kill-window -t =firstmate:=fm-task-x1" "$case_dir/tmux.log" 2>/dev/null \
     || fail "unlanded-concluded: the finished worker's window was left running: $(cat "$case_dir/tmux.log" 2>/dev/null)"
   grep -q "Stopped the finished worker at firstmate:fm-task-x1" "$case_dir/stderr" \
@@ -1309,7 +1316,83 @@ test_unlanded_refusal_stops_a_concluded_worker_and_reaps_its_leak() {
   grep -q "bin/fm-captain-hold.sh hold task-x1 --reason" "$case_dir/stderr" \
     || fail "unlanded-concluded: refusal did not name the hold that bounds the wait: $(cat "$case_dir/stderr")"
   assert_refusal_retained_task_state "$case_dir" unlanded-concluded "$head"
-  pass "an unlanded-work refusal stops a concluded worker and reaps its leaked process while keeping the unlanded commits"
+  pass "an unlanded-work refusal stops a concluded worker's surface, keeps its unlanded commits, and never reaps the retained worktree's processes"
+}
+
+# A concluded worker whose own no-mistakes run is parked at a gate is the
+# only thing that can answer that gate, so a refusal retains it and never
+# aborts the run; only a completed teardown concludes a parked run.
+test_refusal_retains_a_worker_whose_own_run_is_parked() {
+  local case_dir rc pr_head abort_log
+  case_dir=$(make_case dirty-wt-parked-run)
+  write_meta "$case_dir" no-mistakes ship
+  printf '%s\n' 'pr=https://github.com/example/repo/pull/7' >> "$case_dir/state/task-x1.meta"
+  printf 'done: PR checks green\n' > "$case_dir/state/task-x1.status"
+  wt_commit_file "$case_dir" feature.txt hello "add feature"
+  land_on_origin_main "$case_dir" feature.txt hello
+  pr_head=$(git -C "$case_dir/wt" rev-parse HEAD)
+  add_gh_pr_merged_for_head "$case_dir" "$pr_head"
+  printf '%s\n' "uncommitted edit" > "$case_dir/wt/feature.txt"
+  add_logging_tmux "$case_dir"
+  abort_log="$case_dir/nm-abort.log"
+
+  set +e
+  FM_FAKE_AXI_STATUS="$(parked_axi_status_toon fm/task-x1 "$pr_head")" \
+  FM_FAKE_NM_ABORT_LOG="$abort_log" \
+    run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 1 "$rc" "dirty-wt-parked-run: teardown should refuse the dirty worktree"
+  [ ! -s "$abort_log" ] || fail "dirty-wt-parked-run: a refusal aborted the task's parked no-mistakes run: $(cat "$abort_log")"
+  if grep -q "kill-window" "$case_dir/tmux.log" 2>/dev/null; then
+    fail "dirty-wt-parked-run: a refusal stopped the worker its parked run still needs: $(cat "$case_dir/tmux.log")"
+  fi
+  grep -q "The finished worker at firstmate:fm-task-x1 is retained: its no-mistakes run .* is parked at a gate" "$case_dir/stderr" \
+    || fail "dirty-wt-parked-run: refusal did not say why the worker was retained: $(cat "$case_dir/stderr")"
+  assert_refusal_retained_task_state "$case_dir" dirty-wt-parked-run "$pr_head"
+  pass "a refusal retains a concluded worker whose own no-mistakes run is parked, and never aborts that run"
+}
+
+# A rerun of the same refusal after the first one already closed the endpoint
+# reports the endpoint as already gone instead of claiming a fresh stop.
+test_refusal_rerun_reports_an_already_gone_worker() {
+  local case_dir rc pr_head
+  case_dir=$(make_case dirty-wt-rerun)
+  write_meta "$case_dir" no-mistakes ship
+  printf '%s\n' 'pr=https://github.com/example/repo/pull/7' >> "$case_dir/state/task-x1.meta"
+  printf 'done: validation green, ready to land\n' > "$case_dir/state/task-x1.status"
+  wt_commit_file "$case_dir" feature.txt hello "add feature"
+  land_on_origin_main "$case_dir" feature.txt hello
+  pr_head=$(git -C "$case_dir/wt" rev-parse HEAD)
+  add_gh_pr_merged_for_head "$case_dir" "$pr_head"
+  printf '%s\n' "uncommitted edit" > "$case_dir/wt/feature.txt"
+  add_logging_tmux "$case_dir"
+
+  set +e
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+  expect_code 1 "$rc" "dirty-wt-rerun: the first teardown should refuse the dirty worktree"
+  grep -q "Stopped the finished worker at firstmate:fm-task-x1" "$case_dir/stderr" \
+    || fail "dirty-wt-rerun: the first refusal did not stop the worker: $(cat "$case_dir/stderr")"
+  : > "$case_dir/tmux.log"
+
+  set +e
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr2"
+  rc=$?
+  set -e
+  expect_code 1 "$rc" "dirty-wt-rerun: the rerun should still refuse the dirty worktree"
+  if grep -q "kill-window" "$case_dir/tmux.log" 2>/dev/null; then
+    fail "dirty-wt-rerun: the rerun closed an endpoint that was already gone: $(cat "$case_dir/tmux.log")"
+  fi
+  if grep -q "Stopped the finished worker" "$case_dir/stderr2"; then
+    fail "dirty-wt-rerun: the rerun claimed a fresh stop of an already-gone worker: $(cat "$case_dir/stderr2")"
+  fi
+  grep -q "The finished worker at firstmate:fm-task-x1 is already gone (endpoint state: missing)" "$case_dir/stderr2" \
+    || fail "dirty-wt-rerun: the rerun did not report the endpoint as already gone: $(cat "$case_dir/stderr2")"
+  assert_refusal_retained_task_state "$case_dir" dirty-wt-rerun "$pr_head"
+  pass "a rerun of a retaining refusal reports an already-gone worker instead of claiming a fresh stop"
 }
 
 test_local_only_unmerged_refusal_stops_a_concluded_worker() {
@@ -3903,7 +3986,9 @@ test_content_fallback_refreshes_stale_origin_ref
 test_dirty_worktree_refuses
 test_dirty_worktree_refusal_stops_a_concluded_worker
 test_dirty_worktree_refusal_reports_a_worker_it_could_not_stop
-test_unlanded_refusal_stops_a_concluded_worker_and_reaps_its_leak
+test_unlanded_refusal_stops_a_concluded_worker_and_keeps_its_worktree_processes
+test_refusal_retains_a_worker_whose_own_run_is_parked
+test_refusal_rerun_reports_an_already_gone_worker
 test_local_only_unmerged_refusal_stops_a_concluded_worker
 test_dirty_worktree_refusal_keeps_a_live_worker
 test_gh_error_and_content_absent_refuses

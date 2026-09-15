@@ -200,10 +200,12 @@
 # delete, or backend kill below - a still-active run or a leaked process may
 # own live work in that worktree). A landed-work refusal that retains a task
 # whose own worker has already concluded (bin/fm-classify-lib.sh's
-# status_task_concluded) runs the same sequence in the same order and then
-# closes only the recorded endpoint - the copy, its work, and every durable
-# record stay - so a finished worker never keeps running because its cleanup
-# is waiting on the captain (stop_concluded_worker_for_refusal):
+# status_task_concluded) does NOT run this sequence: it closes only the
+# recorded endpoint, and only when no parked run of the task's own is waiting
+# on that worker - the copy, its work, every durable record, the parked run,
+# and every process rooted in the retained copy stay - so a finished worker
+# never keeps running because its cleanup is waiting on the captain
+# (stop_concluded_worker_for_refusal):
 #   Fix 1 - conclude the task's own no-mistakes run. A ship task's worktree can
 #     be torn down while its no-mistakes pipeline run is still PARKED at a gate
 #     (awaiting_approval/fix_review/any awaiting_agent field), with no worker
@@ -1692,27 +1694,35 @@ herdr_presentation_retire_candidate_read() {
 
 # A refusal that keeps the isolated copy for the captain's decision must not
 # keep the finished worker running in it. When the task's own worker has
-# concluded (bin/fm-classify-lib.sh's status_task_concluded), the refusal runs
-# the pre-teardown cleanup sequence from the script header in its own order -
-# Fix 1 concludes the task's parked no-mistakes run, Fix 2 reaps processes
-# rooted in the worktree or tasktmp, then the recorded endpoint is closed
-# through the same locked close a completed teardown ends with - while the
-# copy, its commits and uncommitted changes, and every durable record stay. A
-# run that cannot be concluded leaves the worker in place for it; a process
-# the reap cannot prove is the task's own is reported, never killed. The
-# outcome line reports the endpoint state actually observed after the close,
-# never the attempt: a refused, skipped, or unconfirmed close names the
-# endpoint and leaves the backend's own reason on stderr. A worker that is
-# still live is never stopped by a refusal.
+# concluded (bin/fm-classify-lib.sh's status_task_concluded), the refusal
+# closes only the recorded endpoint - through the same locked close a
+# completed teardown ends with - while the copy, its commits and uncommitted
+# changes, and every durable record stay. Nothing else of the pre-teardown
+# cleanup sequence runs at a refusal: a parked no-mistakes run is never
+# aborted (the worker is retained to answer its gate), and no process rooted
+# in the retained worktree is reaped, because that copy is exactly what the
+# captain may be inspecting. The outcome line reports the endpoint state
+# actually observed, never the attempt: an endpoint already gone is named as
+# such, a backend that cannot classify its endpoint reports the close as
+# unconfirmed, and a refused or failed close names the endpoint and leaves
+# the backend's own reason on stderr. A worker that is still live is never
+# stopped by a refusal.
 stop_concluded_worker_for_refusal() {
   local state session pane
   status_task_concluded "$STATE/$ID.status" "$META" || return 0
   [ "$BACKEND" != orca ] || [ -n "$T_ORCA" ] || return 0
-  if ! conclude_task_no_mistakes_run "$WT"; then
-    echo "warning: the finished worker at $T was left running because its parked no-mistakes run could not be concluded first." >&2
+  if [ "$KIND" = ship ] && command -v no-mistakes >/dev/null 2>&1 \
+     && task_run_is_own_parked_run "$WT"; then
+    echo "The finished worker at $T is retained: its no-mistakes run $TASK_RUN_ID is parked at a gate this worker answers, and a refusal never aborts a run." >&2
     return 0
   fi
-  reap_task_worktree_processes worktree "$WT" "$TASK_TMP" || true
+  state=$(fm_backend_agent_state "$BACKEND" "$T")
+  case "$state" in
+    dead|missing)
+      echo "The finished worker at $T is already gone (endpoint state: $state); the worktree, its work, and the task record are retained." >&2
+      return 0
+      ;;
+  esac
   if [ "$BACKEND" = herdr ]; then
     if teardown_herdr_preflight_target "$T" "$ID"; then
       session=$FM_BACKEND_HERDR_SESSION
@@ -1734,8 +1744,11 @@ stop_concluded_worker_for_refusal() {
     dead|missing)
       echo "Stopped the finished worker at $T; the worktree, its work, and the task record are retained." >&2
       ;;
+    unverified)
+      echo "Close requested for the finished worker at $T; the $BACKEND backend cannot classify its endpoint state, so the stop is unconfirmed. The worktree, its work, and the task record are retained." >&2
+      ;;
     *)
-      echo "warning: the finished worker at $T could not be confirmed stopped (endpoint state: $state); it may still be running - rerun teardown once the close can run, or stop it with bin/fm-control.sh $ID exit." >&2
+      echo "warning: the finished worker at $T could not be confirmed stopped (endpoint state: $state); it may still be running - stop it with bin/fm-control.sh $ID exit, or rerun teardown once the close can run." >&2
       ;;
   esac
 }
