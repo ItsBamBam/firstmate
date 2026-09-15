@@ -151,6 +151,7 @@ case "${1:-}" in
           fi
         else
           printf '%s\n' "${FM_FAKE_AXI_STATUS:-}"
+          exit "${FM_FAKE_AXI_STATUS_RC:-0}"
         fi
         ;;
       abort)
@@ -1221,9 +1222,22 @@ SH
   chmod +x "$case_dir/fakebin/tmux"
 }
 
-# The no-mistakes answer that PROVES this branch's run no longer needs its
-# worker: a terminal run bound to the task branch. A refusal stops nothing on
-# an empty or unrecognized answer.
+# The no-mistakes answers that PROVE this branch's run no longer needs its
+# worker. The first is the CLI's positive no-run answer (exit 0,
+# `runs_on_current_branch: 0`, only other branches' runs in the table, no
+# `id:` line) - what a task that never drove the pipeline sees. The second is
+# a terminal run bound to the task branch. A refusal stops nothing on a query
+# failure or an unrecognized answer.
+no_run_axi_status_toon() {  # <branch>
+  cat <<EOF
+current_branch: $1
+runs_on_current_branch: 0
+runs[1]{id,branch,status,head,pr}:
+  01OTHER,fm/other-task,completed,0123456,
+help[1]: No run exists for this branch; every run listed above is on another branch - inspect one deliberately with \`no-mistakes axi status --run <id>\`
+EOF
+}
+
 terminal_axi_status_toon() {  # <branch> <head>
   cat <<EOF
 run:
@@ -1251,12 +1265,13 @@ assert_agent_stopped_in_place() {
     || fail "$label: refusal did not report the verified stop: $(cat "$case_dir/stderr")"
 }
 
-# Runs teardown for a concluded-worker refusal case: no-mistakes proves the
-# task's run terminal unless the caller overrides FM_FAKE_AXI_STATUS, and the
-# control plane's waits are shortened. Args: case_dir head
+# Runs teardown for a concluded-worker refusal case: no-mistakes answers with
+# its positive no-run shape for the task branch unless the caller overrides
+# FM_FAKE_AXI_STATUS, and the control plane's waits are shortened.
+# Args: case_dir head
 run_refusal_teardown() {
   local case_dir=$1 head=$2
-  FM_FAKE_AXI_STATUS="${FM_FAKE_AXI_STATUS-$(terminal_axi_status_toon fm/task-x1 "$head")}" \
+  FM_FAKE_AXI_STATUS="${FM_FAKE_AXI_STATUS-$(no_run_axi_status_toon fm/task-x1)}" \
   FM_CONTROL_POLL=0.05 FM_CONTROL_EXIT_WAIT=1 FM_CONTROL_SETTLE_WAIT=0.1 \
     run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr"
 }
@@ -1289,7 +1304,8 @@ test_dirty_worktree_refusal_stops_a_concluded_worker() {
   pr_head=$(seed_dirty_landed_case "$case_dir" 'blocked: stopped on request; branch preserved\nworking: resumed\ndone: validation green, ready to land\n')
 
   set +e
-  run_refusal_teardown "$case_dir" "$pr_head"
+  FM_FAKE_AXI_STATUS="$(terminal_axi_status_toon fm/task-x1 "$pr_head")" \
+    run_refusal_teardown "$case_dir" "$pr_head"
   rc=$?
   set -e
 
@@ -1395,8 +1411,8 @@ test_refusal_retains_a_worker_whose_own_run_is_parked() {
   pass "a refusal retains a concluded worker whose own no-mistakes run is parked, and never aborts that run"
 }
 
-# When no-mistakes cannot prove that no run still needs the worker (here an
-# empty status answer, the same shape as a timed-out or unreachable daemon),
+# When no-mistakes cannot prove that no run still needs the worker (here a
+# failed status query - the daemon unreachable - the same shape as a timeout),
 # the refusal retains the worker and says so rather than stopping it.
 test_refusal_retains_a_worker_when_the_run_state_is_unproven() {
   local case_dir rc pr_head
@@ -1404,7 +1420,8 @@ test_refusal_retains_a_worker_when_the_run_state_is_unproven() {
   pr_head=$(seed_dirty_landed_case "$case_dir" 'done: PR checks green\n')
 
   set +e
-  FM_FAKE_AXI_STATUS='' run_refusal_teardown "$case_dir" "$pr_head"
+  FM_FAKE_AXI_STATUS='error: daemon socket did not accept a connection' FM_FAKE_AXI_STATUS_RC=1 \
+    run_refusal_teardown "$case_dir" "$pr_head"
   rc=$?
   set -e
 
@@ -1415,6 +1432,34 @@ test_refusal_retains_a_worker_when_the_run_state_is_unproven() {
     || fail "dirty-wt-unproven-run: refusal did not report the uncertainty: $(cat "$case_dir/stderr")"
   assert_refusal_retained_task_state "$case_dir" dirty-wt-unproven-run "$pr_head"
   pass "a refusal retains a concluded worker while no-mistakes cannot prove its run no longer needs it"
+}
+
+# A concluded task whose endpoint is already gone (window closed by hand) has
+# nothing running, but a keep answer cannot relaunch into a missing endpoint:
+# the refusal says the endpoint is gone and points at reconciliation instead
+# of claiming the endpoint is retained, and types nothing.
+test_refusal_reports_a_missing_endpoint_as_needing_reconciliation() {
+  local case_dir rc pr_head
+  case_dir=$(make_case dirty-wt-missing-endpoint)
+  pr_head=$(seed_dirty_landed_case "$case_dir" 'done: validation green, ready to land\n')
+  : > "$case_dir/tmux.killed"
+
+  set +e
+  run_refusal_teardown "$case_dir" "$pr_head"
+  rc=$?
+  set -e
+
+  expect_code 1 "$rc" "dirty-wt-missing-endpoint: teardown should refuse the dirty worktree"
+  [ ! -e "$case_dir/tmux.literal" ] || fail "dirty-wt-missing-endpoint: a refusal typed into a missing endpoint: $(cat "$case_dir/tmux.literal")"
+  if grep -q "endpoint, the worktree, its work, and the task record are retained" "$case_dir/stderr"; then
+    fail "dirty-wt-missing-endpoint: the refusal claimed a missing endpoint was retained: $(cat "$case_dir/stderr")"
+  fi
+  grep -q "The finished worker's endpoint firstmate:fm-task-x1 is already gone (endpoint state: missing)" "$case_dir/stderr" \
+    || fail "dirty-wt-missing-endpoint: the refusal did not report the endpoint as gone: $(cat "$case_dir/stderr")"
+  grep -q "reconcile the task first (bin/fm-crew-state.sh task-x1" "$case_dir/stderr" \
+    || fail "dirty-wt-missing-endpoint: the refusal did not point at reconciliation: $(cat "$case_dir/stderr")"
+  assert_refusal_retained_task_state "$case_dir" dirty-wt-missing-endpoint "$pr_head"
+  pass "a refusal reports an already-missing endpoint as needing reconciliation rather than as retained"
 }
 
 # A rerun of the same refusal after the first one already stopped the agent
@@ -1451,6 +1496,9 @@ test_refusal_rerun_reports_an_already_stopped_worker() {
   pass "a rerun of a retaining refusal reports an already-stopped worker with its endpoint intact"
 }
 
+# A local-only task never drives the pipeline, so its refusal stops the
+# concluded worker without waiting on any no-mistakes answer at all - here the
+# fake daemon is unreachable, which would retain a no-mistakes-mode worker.
 test_local_only_unmerged_refusal_stops_a_concluded_worker() {
   local case_dir rc head
   case_dir=$(make_case local-unmerged-concluded)
@@ -1462,7 +1510,8 @@ test_local_only_unmerged_refusal_stops_a_concluded_worker() {
   add_agent_tmux "$case_dir"
 
   set +e
-  run_refusal_teardown "$case_dir" "$head"
+  FM_FAKE_AXI_STATUS='error: daemon socket did not accept a connection' FM_FAKE_AXI_STATUS_RC=1 \
+    run_refusal_teardown "$case_dir" "$head"
   rc=$?
   set -e
 
@@ -4033,6 +4082,7 @@ test_dirty_worktree_refusal_reports_a_worker_it_could_not_stop
 test_unlanded_refusal_stops_a_concluded_worker_and_keeps_its_worktree_processes
 test_refusal_retains_a_worker_whose_own_run_is_parked
 test_refusal_retains_a_worker_when_the_run_state_is_unproven
+test_refusal_reports_a_missing_endpoint_as_needing_reconciliation
 test_refusal_rerun_reports_an_already_stopped_worker
 test_local_only_unmerged_refusal_stops_a_concluded_worker
 test_dirty_worktree_refusal_keeps_a_live_worker
