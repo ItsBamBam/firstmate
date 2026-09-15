@@ -1220,6 +1220,56 @@ test_dirty_worktree_refusal_stops_a_concluded_worker() {
   pass "a dirty refusal closes a concluded worker's endpoint and keeps its copy, edits, and record"
 }
 
+# The stop must report what was observed, never the attempt: a backend whose
+# close is refused while the window still shows a live agent is reported as
+# not stopped, with the endpoint named, so the operator is never told the
+# orphan is gone while it is still running. Args: case_dir
+add_refusing_tmux() {
+  local case_dir=$1
+  cat > "$case_dir/fakebin/tmux" <<SH
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "$case_dir/tmux.log"
+case "\${1:-}" in
+  kill-window) echo "fake tmux: refusing to close the window" >&2; exit 1 ;;
+  list-windows) printf 'fm-task-x1\n' ;;
+  display-message)
+    case "\$*" in *pane_current_command*) printf 'claude\n' ;; esac ;;
+esac
+exit 0
+SH
+  chmod +x "$case_dir/fakebin/tmux"
+}
+
+test_dirty_worktree_refusal_reports_a_worker_it_could_not_stop() {
+  local case_dir rc pr_head
+  case_dir=$(make_case dirty-wt-unstopped)
+  write_meta "$case_dir" no-mistakes ship
+  printf '%s\n' 'pr=https://github.com/example/repo/pull/7' >> "$case_dir/state/task-x1.meta"
+  printf 'done: validation green, ready to land\n' > "$case_dir/state/task-x1.status"
+  wt_commit_file "$case_dir" feature.txt hello "add feature"
+  land_on_origin_main "$case_dir" feature.txt hello
+  pr_head=$(git -C "$case_dir/wt" rev-parse HEAD)
+  add_gh_pr_merged_for_head "$case_dir" "$pr_head"
+  printf '%s\n' "uncommitted edit" > "$case_dir/wt/feature.txt"
+  add_refusing_tmux "$case_dir"
+
+  set +e
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 1 "$rc" "dirty-wt-unstopped: teardown should still refuse the dirty worktree"
+  grep -Fq "kill-window -t =firstmate:=fm-task-x1" "$case_dir/tmux.log" 2>/dev/null \
+    || fail "dirty-wt-unstopped: the close was never attempted: $(cat "$case_dir/tmux.log" 2>/dev/null)"
+  if grep -q "Stopped the finished worker" "$case_dir/stderr"; then
+    fail "dirty-wt-unstopped: a refused close was reported as a stopped worker: $(cat "$case_dir/stderr")"
+  fi
+  grep -q "warning: the finished worker at firstmate:fm-task-x1 could not be confirmed stopped (endpoint state: alive)" "$case_dir/stderr" \
+    || fail "dirty-wt-unstopped: the unconfirmed stop was not reported against the endpoint: $(cat "$case_dir/stderr")"
+  assert_refusal_retained_task_state "$case_dir" dirty-wt-unstopped "$pr_head"
+  pass "a dirty refusal reports a worker it could not confirm stopped instead of claiming success"
+}
+
 test_dirty_worktree_refusal_keeps_a_live_worker() {
   local case_dir rc pr_head
   case_dir=$(make_case dirty-wt-live)
@@ -3785,6 +3835,7 @@ test_content_in_default_fallback_allows
 test_content_fallback_refreshes_stale_origin_ref
 test_dirty_worktree_refuses
 test_dirty_worktree_refusal_stops_a_concluded_worker
+test_dirty_worktree_refusal_reports_a_worker_it_could_not_stop
 test_dirty_worktree_refusal_keeps_a_live_worker
 test_gh_error_and_content_absent_refuses
 test_legacy_record_without_the_flag_refuses

@@ -1655,17 +1655,74 @@ teardown_treehouse_return() {
   return 1
 }
 
+# Whether this task's Herdr presentation journal names exactly the recorded
+# endpoint's workspace (read-only; sets HERDR_PRESENTATION_* for the close).
+# The journal never authorizes anything by itself - see the script header.
+HERDR_PRESENTATION_JOURNAL=
+HERDR_PRESENTATION_RETIRE_CANDIDATE=0
+HERDR_PRESENTATION_SESSION=
+HERDR_PRESENTATION_PANE=
+herdr_presentation_retire_candidate_read() {
+  HERDR_PRESENTATION_JOURNAL="$STATE/$ID.herdr-presentation"
+  HERDR_PRESENTATION_RETIRE_CANDIDATE=0
+  HERDR_PRESENTATION_SESSION=
+  HERDR_PRESENTATION_PANE=
+  [ "$BACKEND" = herdr ] || return 1
+  { [ -e "$HERDR_PRESENTATION_JOURNAL" ] || [ -L "$HERDR_PRESENTATION_JOURNAL" ]; } || return 1
+  fm_backend_source herdr || true
+  HERDR_PRESENTATION_SESSION=$(meta_value "$META" herdr_session)
+  HERDR_PRESENTATION_WORKSPACE=$(meta_value "$META" herdr_workspace_id)
+  HERDR_PRESENTATION_PANE=$(meta_value "$META" herdr_pane_id)
+  if [ -n "$HERDR_PRESENTATION_SESSION" ] \
+     && [ -n "$HERDR_PRESENTATION_WORKSPACE" ] \
+     && [ -n "$HERDR_PRESENTATION_PANE" ] \
+     && [ "$T" = "$HERDR_PRESENTATION_SESSION:$HERDR_PRESENTATION_PANE" ] \
+     && fm_backend_herdr_projection_endpoint_matches_journal \
+       "$HERDR_PRESENTATION_SESSION" "$HERDR_PRESENTATION_WORKSPACE" \
+       "$HERDR_PRESENTATION_JOURNAL" "$ID"; then
+    HERDR_PRESENTATION_RETIRE_CANDIDATE=1
+  fi
+  [ "$HERDR_PRESENTATION_RETIRE_CANDIDATE" = 1 ]
+}
+
 # A refusal that keeps the isolated copy for the captain's discard decision
 # must not keep the finished worker running in it: its endpoint is closed here
 # when the task's own worker has concluded (bin/fm-classify-lib.sh's
-# status_task_concluded), the same best-effort close a completed teardown ends
-# with, while the copy, its uncommitted changes, and every durable record stay.
-# A worker that is still live is never stopped by a refusal.
+# status_task_concluded), through the same locked close a completed teardown
+# ends with, while the copy, its uncommitted changes, and every durable record
+# stay. The outcome line reports the endpoint state actually observed after
+# the close, never the attempt: a refused, skipped, or unconfirmed close names
+# the endpoint and leaves the backend's own reason on stderr. A worker that is
+# still live is never stopped by a refusal.
 stop_concluded_worker_for_refusal() {
+  local state session pane
   status_task_concluded "$STATE/$ID.status" "$META" || return 0
   [ "$BACKEND" != orca ] || [ -n "$T_ORCA" ] || return 0
-  fm_backend_kill "$BACKEND" "$T" "$(meta_value "$META" zellij_tab_id)" "fm-$ID" 2>/dev/null || true
-  echo "Stopped the finished worker at $T; the worktree, its uncommitted changes, and the task record are retained." >&2
+  if [ "$BACKEND" = herdr ]; then
+    if teardown_herdr_preflight_target "$T" "$ID"; then
+      session=$FM_BACKEND_HERDR_SESSION
+      pane=$FM_BACKEND_HERDR_PANE
+      if herdr_presentation_retire_candidate_read; then
+        fm_backend_herdr_projection_close_pane_focus_preserving "$session" "$pane" || true
+        if [ "$(fm_backend_herdr_pane_agent_state "$session" "$pane")" = dead ]; then
+          rm -f "$HERDR_PRESENTATION_JOURNAL"
+        fi
+      else
+        fm_backend_herdr_kill_serialized "$session" "$pane" || true
+      fi
+    fi
+  else
+    fm_backend_kill "$BACKEND" "$T" "$(meta_value "$META" zellij_tab_id)" "fm-$ID" || true
+  fi
+  state=$(fm_backend_agent_state "$BACKEND" "$T")
+  case "$state" in
+    dead|missing)
+      echo "Stopped the finished worker at $T; the worktree, its uncommitted changes, and the task record are retained." >&2
+      ;;
+    *)
+      echo "warning: the finished worker at $T could not be confirmed stopped (endpoint state: $state); it may still be running - rerun teardown once the close can run, or stop it with bin/fm-control.sh $ID exit." >&2
+      ;;
+  esac
 }
 
 # A held task is what keeps a refused, finished task from re-surfacing as
@@ -3372,26 +3429,7 @@ elif [ -d "$WT" ] && [ "$KIND" != secondmate ]; then
   fm_treehouse_slot_owner_release "$WT" "$ID"
 fi
 
-HERDR_PRESENTATION_JOURNAL="$STATE/$ID.herdr-presentation"
-HERDR_PRESENTATION_RETIRE_CANDIDATE=0
-HERDR_PRESENTATION_SESSION=
-HERDR_PRESENTATION_PANE=
-if [ "$BACKEND" = herdr ] \
-   && { [ -e "$HERDR_PRESENTATION_JOURNAL" ] || [ -L "$HERDR_PRESENTATION_JOURNAL" ]; }; then
-  fm_backend_source herdr || true
-  HERDR_PRESENTATION_SESSION=$(meta_value "$META" herdr_session)
-  HERDR_PRESENTATION_WORKSPACE=$(meta_value "$META" herdr_workspace_id)
-  HERDR_PRESENTATION_PANE=$(meta_value "$META" herdr_pane_id)
-  if [ -n "$HERDR_PRESENTATION_SESSION" ] \
-     && [ -n "$HERDR_PRESENTATION_WORKSPACE" ] \
-     && [ -n "$HERDR_PRESENTATION_PANE" ] \
-     && [ "$T" = "$HERDR_PRESENTATION_SESSION:$HERDR_PRESENTATION_PANE" ] \
-     && fm_backend_herdr_projection_endpoint_matches_journal \
-       "$HERDR_PRESENTATION_SESSION" "$HERDR_PRESENTATION_WORKSPACE" \
-       "$HERDR_PRESENTATION_JOURNAL" "$ID"; then
-    HERDR_PRESENTATION_RETIRE_CANDIDATE=1
-  fi
-fi
+herdr_presentation_retire_candidate_read || true
 
 if [ "$HERDR_PRESENTATION_RETIRE_CANDIDATE" = 1 ]; then
   # The presentation lock was acquired before the worktree return above; a
