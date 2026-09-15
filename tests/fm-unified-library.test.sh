@@ -140,8 +140,9 @@ test_search_has_no_limit_override() {
   expect_code 2 "$rc" "search --limit"
   assert_contains "$out" "unknown search option: --limit" "search accepted a limit override"
   [ ! -s "$CALLS" ] || fail "rejected --limit still invoked library.py"
-  out=$(run_adapter search "adapter lookup contract")
-  assert_contains "$out" '"limit": 3' "annotated search did not record the fixed limit"
+  run_adapter search "adapter lookup contract" >/dev/null
+  [ "$(cat "$CALLS")" = "search adapter lookup contract --limit 3" ] \
+    || fail "search did not call library.py with the fixed limit 3: $(cat "$CALLS")"
   pass "search always requests exactly three cards"
 }
 

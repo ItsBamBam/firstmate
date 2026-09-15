@@ -106,7 +106,6 @@ annotate_search() {
 import json
 import sys
 
-limit = int(sys.argv[1])
 raw = sys.stdin.read()
 try:
     data = json.loads(raw)
@@ -131,11 +130,10 @@ if not verified:
 data["adapter"] = {
     "cards_are_not_authority_over_domain_gates": True,
     "drafts_are_prior_art": True,
-    "limit": limit,
 }
 json.dump(data, sys.stdout, indent=2, ensure_ascii=False, sort_keys=True)
 sys.stdout.write("\n")
-' "$1"
+'
 }
 
 cmd_recall() {
@@ -182,7 +180,7 @@ cmd_search() {
     printf '%s\n' "$out"
     exit "$rc"
   fi
-  printf '%s\n' "$out" | annotate_search "$SEARCH_LIMIT"
+  printf '%s\n' "$out" | annotate_search
 }
 
 cmd_open() {
