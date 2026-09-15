@@ -1107,8 +1107,9 @@ test_server_ensure_scrubs_home_and_harness_identity() {
 # make_herdr_server_linger_fakebin: a stateful server stub whose `server`
 # subcommand records its own process identity (pid, parent, process group) and
 # then lingers like the real headless server does, so a test can prove how the
-# adapter launched it. The stub exits on TERM; the test kills it by the
-# recorded pid.
+# adapter launched it. The stub exits on TERM, and on its own once its running
+# marker is gone, so a test run torn down with its temp dir never leaves it
+# behind; the test kills it by the recorded pid.
 make_herdr_server_linger_fakebin() {  # <dir> -> echoes fakebin dir
   local dir=$1 fb="$1/fakebin"
   mkdir -p "$fb"
@@ -1127,7 +1128,7 @@ case "${1:-}" in
     printf 'pid=%s\nppid=%s\npgid=%s\n' "$$" "$PPID" "$(ps -o pgid= -p "$$" | tr -d ' ')" > "$FM_HERDR_SERVER_ENV_LOG"
     : > "$FM_HERDR_SERVER_MARKER"
     trap 'exit 0' TERM
-    while :; do sleep 1; done
+    while [ -e "$FM_HERDR_SERVER_MARKER" ]; do sleep 1; done
     ;;
 esac
 SH
@@ -1143,7 +1144,7 @@ SH
 # group. After server_ensure returns, the launcher shell must have no child
 # left, and the server's parent and process group must both be outside it.
 test_server_ensure_detaches_server_from_launcher() {
-  local dir log marker fb report server_pid server_ppid server_pgid server_parent_cmd launcher_pid launcher_pgid launcher_cmd
+  local dir log marker fb report launch_rc server_pid server_ppid server_pgid server_parent_cmd launcher_pid launcher_pgid launcher_cmd
   dir="$TMP_ROOT/server-detach"; mkdir -p "$dir"; log="$dir/identity"; marker="$dir/running"; report="$dir/report"
   fb=$(make_herdr_server_linger_fakebin "$dir")
   PATH="$fb:$PATH" FM_HERDR_SERVER_ENV_LOG="$log" FM_HERDR_SERVER_MARKER="$marker" \
@@ -1156,20 +1157,28 @@ test_server_ensure_detaches_server_from_launcher() {
       # recognized in the process table.
       printf "launcher_pid=%s\nlauncher_pgid=%s\nlauncher_cmd=%s\n" "$$" "$(ps -o pgid= -p "$$" | tr -d " ")" "$(ps -o command= -p "$$")"
     ' "$ROOT" > "$report"
-  expect_code 0 $? "server_ensure should start the lingering fake server"
-  server_pid=$(sed -n 's/^pid=//p' "$log")
+  launch_rc=$?
+  server_pid=$(sed -n 's/^pid=//p' "$log" 2>/dev/null)
+  # The stub lingers until it is told to stop, so every failed assertion below
+  # stops it first: a failed run must not leave the very leak shape this case
+  # exists to catch behind on the test host.
+  linger_fail() {  # <message>
+    [ -z "$server_pid" ] || kill -TERM "$server_pid" 2>/dev/null || true
+    fail "$1"
+  }
+  [ "$launch_rc" -eq 0 ] || linger_fail "server_ensure should start the lingering fake server (rc=$launch_rc)"
   server_ppid=$(sed -n 's/^ppid=//p' "$log")
   server_pgid=$(sed -n 's/^pgid=//p' "$log")
   launcher_pid=$(sed -n 's/^launcher_pid=//p' "$report")
   launcher_pgid=$(sed -n 's/^launcher_pgid=//p' "$report")
   launcher_cmd=$(sed -n 's/^launcher_cmd=//p' "$report")
-  [ -n "$server_pid" ] && [ -n "$launcher_pid" ] && [ -n "$launcher_cmd" ] || fail "server or launcher identity was not recorded (server='$server_pid' launcher='$launcher_pid' cmd='$launcher_cmd')"
-  kill -0 "$server_pid" 2>/dev/null || fail "the fake server did not linger after launch (pid $server_pid is gone), so this case proves nothing"
-  [ "$server_ppid" != "$launcher_pid" ] || fail "the server's parent is the launcher shell itself (pid $launcher_pid), so the launcher would live as long as the server"
+  [ -n "$server_pid" ] && [ -n "$launcher_pid" ] && [ -n "$launcher_cmd" ] || linger_fail "server or launcher identity was not recorded (server='$server_pid' launcher='$launcher_pid' cmd='$launcher_cmd')"
+  kill -0 "$server_pid" 2>/dev/null || linger_fail "the fake server did not linger after launch (pid $server_pid is gone), so this case proves nothing"
+  [ "$server_ppid" != "$launcher_pid" ] || linger_fail "the server's parent is the launcher shell itself (pid $launcher_pid), so the launcher would live as long as the server"
   server_parent_cmd=$(ps -o command= -p "$server_ppid" 2>/dev/null || true)
-  [ "$server_parent_cmd" != "$launcher_cmd" ] || fail "the server's parent (pid $server_ppid) is a live copy of the launcher shell; it will wait on the server for the server's whole lifetime"
-  [ "$server_pgid" != "$launcher_pgid" ] || fail "the server shares the launcher's process group $launcher_pgid, so killing the launch would kill the fleet's server"
-  [ "$server_pgid" = "$server_pid" ] || fail "the server should lead its own process group (pgid $server_pgid, pid $server_pid)"
+  [ "$server_parent_cmd" != "$launcher_cmd" ] || linger_fail "the server's parent (pid $server_ppid) is a live copy of the launcher shell; it will wait on the server for the server's whole lifetime"
+  [ "$server_pgid" != "$launcher_pgid" ] || linger_fail "the server shares the launcher's process group $launcher_pgid, so killing the launch would kill the fleet's server"
+  [ "$server_pgid" = "$server_pid" ] || linger_fail "the server should lead its own process group (pgid $server_pgid, pid $server_pid)"
   kill -TERM "$server_pid" 2>/dev/null || true
   pass "fm_backend_herdr_server_ensure: the launched server is reparented away from every launcher shell, in its own process group"
 }

@@ -1270,6 +1270,73 @@ test_dirty_worktree_refusal_reports_a_worker_it_could_not_stop() {
   pass "a dirty refusal reports a worker it could not confirm stopped instead of claiming success"
 }
 
+# Every refusal that retains a concluded task's copy stops its finished worker
+# and reaps its leaked descendants the way a completed teardown does, while
+# the unlanded commits stay exactly where they were: here the no-mistakes
+# unpushed-and-not-landed refusal, with a disowned process rooted under the
+# worktree.
+test_unlanded_refusal_stops_a_concluded_worker_and_reaps_its_leak() {
+  local case_dir rc head pid
+  case_dir=$(make_case unlanded-concluded)
+  write_meta "$case_dir" no-mistakes ship
+  printf 'needs-decision [key=scope]: widen or not\nfailed: giving up, see report\n' \
+    > "$case_dir/state/task-x1.status"
+  wt_commit_file "$case_dir" feature.txt hello "unpushed work"
+  head=$(git -C "$case_dir/wt" rev-parse HEAD)
+  add_logging_tmux "$case_dir"
+  ( cd "$case_dir/wt" && exec sleep 300 ) &
+  pid=$!
+  disown
+  sleep 0.3
+  kill -0 "$pid" 2>/dev/null || fail "unlanded-concluded: setup sleeper did not start"
+
+  set +e
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 1 "$rc" "unlanded-concluded: teardown should still refuse unlanded work"
+  grep -q "REFUSED: worktree .* has work not on any remote and not landed" "$case_dir/stderr" \
+    || fail "unlanded-concluded: refusal did not cite unlanded work: $(cat "$case_dir/stderr")"
+  if kill -0 "$pid" 2>/dev/null; then
+    kill -KILL "$pid" 2>/dev/null || true
+    fail "unlanded-concluded: the leaked worktree process survived the refusal"
+  fi
+  grep -Fq "kill-window -t =firstmate:=fm-task-x1" "$case_dir/tmux.log" 2>/dev/null \
+    || fail "unlanded-concluded: the finished worker's window was left running: $(cat "$case_dir/tmux.log" 2>/dev/null)"
+  grep -q "Stopped the finished worker at firstmate:fm-task-x1" "$case_dir/stderr" \
+    || fail "unlanded-concluded: refusal did not report the stop: $(cat "$case_dir/stderr")"
+  grep -q "bin/fm-captain-hold.sh hold task-x1 --reason" "$case_dir/stderr" \
+    || fail "unlanded-concluded: refusal did not name the hold that bounds the wait: $(cat "$case_dir/stderr")"
+  assert_refusal_retained_task_state "$case_dir" unlanded-concluded "$head"
+  pass "an unlanded-work refusal stops a concluded worker and reaps its leaked process while keeping the unlanded commits"
+}
+
+test_local_only_unmerged_refusal_stops_a_concluded_worker() {
+  local case_dir rc head
+  case_dir=$(make_case local-unmerged-concluded)
+  write_meta "$case_dir" local-only ship
+  printf 'done: ready to merge\n' > "$case_dir/state/task-x1.status"
+  wt_commit "$case_dir" "unmerged work"
+  head=$(git -C "$case_dir/wt" rev-parse HEAD)
+  add_logging_tmux "$case_dir"
+
+  set +e
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 1 "$rc" "local-unmerged-concluded: teardown should still refuse unmerged work"
+  grep -q "REFUSED: local-only worktree" "$case_dir/stderr" \
+    || fail "local-unmerged-concluded: refusal did not cite unmerged work: $(cat "$case_dir/stderr")"
+  grep -Fq "kill-window -t =firstmate:=fm-task-x1" "$case_dir/tmux.log" 2>/dev/null \
+    || fail "local-unmerged-concluded: the finished worker's window was left running: $(cat "$case_dir/tmux.log" 2>/dev/null)"
+  grep -q "Stopped the finished worker at firstmate:fm-task-x1" "$case_dir/stderr" \
+    || fail "local-unmerged-concluded: refusal did not report the stop: $(cat "$case_dir/stderr")"
+  assert_refusal_retained_task_state "$case_dir" local-unmerged-concluded "$head"
+  pass "a local-only unmerged-work refusal stops a concluded worker while keeping the unmerged commits"
+}
+
 test_dirty_worktree_refusal_keeps_a_live_worker() {
   local case_dir rc pr_head
   case_dir=$(make_case dirty-wt-live)
@@ -3836,6 +3903,8 @@ test_content_fallback_refreshes_stale_origin_ref
 test_dirty_worktree_refuses
 test_dirty_worktree_refusal_stops_a_concluded_worker
 test_dirty_worktree_refusal_reports_a_worker_it_could_not_stop
+test_unlanded_refusal_stops_a_concluded_worker_and_reaps_its_leak
+test_local_only_unmerged_refusal_stops_a_concluded_worker
 test_dirty_worktree_refusal_keeps_a_live_worker
 test_gh_error_and_content_absent_refuses
 test_legacy_record_without_the_flag_refuses

@@ -198,7 +198,12 @@
 # Pre-teardown cleanup sequence (runs once every landed/discard-work safety
 # refusal above has already passed, and BEFORE any worktree return, branch
 # delete, or backend kill below - a still-active run or a leaked process may
-# own live work in that worktree):
+# own live work in that worktree). A landed-work refusal that retains a task
+# whose own worker has already concluded (bin/fm-classify-lib.sh's
+# status_task_concluded) runs the same sequence in the same order and then
+# closes only the recorded endpoint - the copy, its work, and every durable
+# record stay - so a finished worker never keeps running because its cleanup
+# is waiting on the captain (stop_concluded_worker_for_refusal):
 #   Fix 1 - conclude the task's own no-mistakes run. A ship task's worktree can
 #     be torn down while its no-mistakes pipeline run is still PARKED at a gate
 #     (awaiting_approval/fix_review/any awaiting_agent field), with no worker
@@ -1685,19 +1690,29 @@ herdr_presentation_retire_candidate_read() {
   [ "$HERDR_PRESENTATION_RETIRE_CANDIDATE" = 1 ]
 }
 
-# A refusal that keeps the isolated copy for the captain's discard decision
-# must not keep the finished worker running in it: its endpoint is closed here
-# when the task's own worker has concluded (bin/fm-classify-lib.sh's
-# status_task_concluded), through the same locked close a completed teardown
-# ends with, while the copy, its uncommitted changes, and every durable record
-# stay. The outcome line reports the endpoint state actually observed after
-# the close, never the attempt: a refused, skipped, or unconfirmed close names
-# the endpoint and leaves the backend's own reason on stderr. A worker that is
+# A refusal that keeps the isolated copy for the captain's decision must not
+# keep the finished worker running in it. When the task's own worker has
+# concluded (bin/fm-classify-lib.sh's status_task_concluded), the refusal runs
+# the pre-teardown cleanup sequence from the script header in its own order -
+# Fix 1 concludes the task's parked no-mistakes run, Fix 2 reaps processes
+# rooted in the worktree or tasktmp, then the recorded endpoint is closed
+# through the same locked close a completed teardown ends with - while the
+# copy, its commits and uncommitted changes, and every durable record stay. A
+# run that cannot be concluded leaves the worker in place for it; a process
+# the reap cannot prove is the task's own is reported, never killed. The
+# outcome line reports the endpoint state actually observed after the close,
+# never the attempt: a refused, skipped, or unconfirmed close names the
+# endpoint and leaves the backend's own reason on stderr. A worker that is
 # still live is never stopped by a refusal.
 stop_concluded_worker_for_refusal() {
   local state session pane
   status_task_concluded "$STATE/$ID.status" "$META" || return 0
   [ "$BACKEND" != orca ] || [ -n "$T_ORCA" ] || return 0
+  if ! conclude_task_no_mistakes_run "$WT"; then
+    echo "warning: the finished worker at $T was left running because its parked no-mistakes run could not be concluded first." >&2
+    return 0
+  fi
+  reap_task_worktree_processes worktree "$WT" "$TASK_TMP" || true
   if [ "$BACKEND" = herdr ]; then
     if teardown_herdr_preflight_target "$T" "$ID"; then
       session=$FM_BACKEND_HERDR_SESSION
@@ -1717,7 +1732,7 @@ stop_concluded_worker_for_refusal() {
   state=$(fm_backend_agent_state "$BACKEND" "$T")
   case "$state" in
     dead|missing)
-      echo "Stopped the finished worker at $T; the worktree, its uncommitted changes, and the task record are retained." >&2
+      echo "Stopped the finished worker at $T; the worktree, its work, and the task record are retained." >&2
       ;;
     *)
       echo "warning: the finished worker at $T could not be confirmed stopped (endpoint state: $state); it may still be running - rerun teardown once the close can run, or stop it with bin/fm-control.sh $ID exit." >&2
@@ -1729,7 +1744,7 @@ stop_concluded_worker_for_refusal() {
 # stale until the captain decides; a backlog row already closed cannot be
 # re-held, so the call then needs its own task id with this one as origin.
 print_hold_hint_for_refusal() {
-  echo "While that OK is pending, hold the task for it: bin/fm-captain-hold.sh hold $ID --reason '<what needs the OK>' - or, when $ID is already closed in the backlog, mint the call: bin/fm-captain-hold.sh hold <new-id> --title '<title>' --origin $ID --reason '<what needs the OK>'." >&2
+  echo "While that is pending, hold the task for it: bin/fm-captain-hold.sh hold $ID --reason '<what is pending>' - or, when $ID is already closed in the backlog, mint the call: bin/fm-captain-hold.sh hold <new-id> --title '<title>' --origin $ID --reason '<what is pending>'." >&2
 }
 
 validate_worktree_teardown_safety() {
@@ -1776,10 +1791,8 @@ validate_worktree_teardown_safety() {
       [ -n "$dirty" ] && echo "uncommitted changes present" >&2
       [ -n "$unmerged" ] && printf 'commits not yet on %s:\n%s\n' "$DEFAULT" "$unmerged" >&2
       echo "Merge the branch into local $DEFAULT first (bin/fm-merge-local.sh after the captain approves), or push to a fork/remote, or get the captain's explicit OK to discard, then --force." >&2
-      if [ -n "$dirty" ]; then
-        print_hold_hint_for_refusal
-        stop_concluded_worker_for_refusal
-      fi
+      print_hold_hint_for_refusal
+      stop_concluded_worker_for_refusal
       return 1
     fi
   elif [ -n "$dirty" ]; then
@@ -1799,6 +1812,8 @@ validate_worktree_teardown_safety() {
       echo "REFUSED: worktree $WT has work not on any remote and not landed." >&2
       printf 'unpushed commits:\n%s\n' "$unpushed" >&2
       echo "Push the branch, land its PR, or get the captain's explicit OK to discard, then --force." >&2
+      print_hold_hint_for_refusal
+      stop_concluded_worker_for_refusal
       return 1
     fi
   fi
