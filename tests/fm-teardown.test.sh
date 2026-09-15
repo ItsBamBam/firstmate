@@ -1496,16 +1496,17 @@ test_refusal_rerun_reports_an_already_stopped_worker() {
   pass "a rerun of a retaining refusal reports an already-stopped worker with its endpoint intact"
 }
 
-# A local-only task never drives the pipeline, so its refusal stops the
-# concluded worker without waiting on any no-mistakes answer at all - here the
-# fake daemon is unreachable, which would retain a no-mistakes-mode worker.
-test_local_only_unmerged_refusal_stops_a_concluded_worker() {
-  local case_dir rc head
-  case_dir=$(make_case local-unmerged-concluded)
-  write_meta "$case_dir" local-only ship
+# A local-only or direct-PR task never drives the pipeline, so its refusal
+# stops the concluded worker without waiting on any no-mistakes answer at all
+# - here the fake daemon is unreachable, which would retain a no-mistakes-mode
+# worker. Args: mode label
+refusal_stops_concluded_worker_without_pipeline_query() {
+  local mode=$1 label=$2 case_dir rc head
+  case_dir=$(make_case "$label")
+  write_meta "$case_dir" "$mode" ship
   printf '%s\n' 'harness=claude' >> "$case_dir/state/task-x1.meta"
-  printf 'done: ready to merge\n' > "$case_dir/state/task-x1.status"
-  wt_commit "$case_dir" "unmerged work"
+  printf 'done: ready to land\n' > "$case_dir/state/task-x1.status"
+  wt_commit_file "$case_dir" feature.txt hello "unlanded work"
   head=$(git -C "$case_dir/wt" rev-parse HEAD)
   add_agent_tmux "$case_dir"
 
@@ -1515,12 +1516,21 @@ test_local_only_unmerged_refusal_stops_a_concluded_worker() {
   rc=$?
   set -e
 
-  expect_code 1 "$rc" "local-unmerged-concluded: teardown should still refuse unmerged work"
-  grep -q "REFUSED: local-only worktree" "$case_dir/stderr" \
-    || fail "local-unmerged-concluded: refusal did not cite unmerged work: $(cat "$case_dir/stderr")"
-  assert_agent_stopped_in_place "$case_dir" local-unmerged-concluded
-  assert_refusal_retained_task_state "$case_dir" local-unmerged-concluded "$head"
-  pass "a local-only unmerged-work refusal stops a concluded worker's agent while keeping the unmerged commits"
+  expect_code 1 "$rc" "$label: teardown should still refuse unlanded work"
+  grep -q "^REFUSED: " "$case_dir/stderr" \
+    || fail "$label: refusal did not cite unlanded work: $(cat "$case_dir/stderr")"
+  assert_agent_stopped_in_place "$case_dir" "$label"
+  assert_refusal_retained_task_state "$case_dir" "$label" "$head"
+}
+
+test_local_only_unmerged_refusal_stops_a_concluded_worker() {
+  refusal_stops_concluded_worker_without_pipeline_query local-only local-unmerged-concluded
+  pass "a local-only unmerged-work refusal stops a concluded worker's agent without consulting no-mistakes"
+}
+
+test_direct_pr_unlanded_refusal_stops_a_concluded_worker() {
+  refusal_stops_concluded_worker_without_pipeline_query direct-PR direct-pr-unlanded-concluded
+  pass "a direct-PR unlanded-work refusal stops a concluded worker's agent without consulting no-mistakes"
 }
 
 test_dirty_worktree_refusal_keeps_a_live_worker() {
@@ -4085,6 +4095,7 @@ test_refusal_retains_a_worker_when_the_run_state_is_unproven
 test_refusal_reports_a_missing_endpoint_as_needing_reconciliation
 test_refusal_rerun_reports_an_already_stopped_worker
 test_local_only_unmerged_refusal_stops_a_concluded_worker
+test_direct_pr_unlanded_refusal_stops_a_concluded_worker
 test_dirty_worktree_refusal_keeps_a_live_worker
 test_gh_error_and_content_absent_refuses
 test_legacy_record_without_the_flag_refuses

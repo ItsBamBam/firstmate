@@ -1668,19 +1668,20 @@ teardown_treehouse_return() {
 # fail-open attribution (a query failure there only skips an abort of a
 # worktree that is being removed anyway), a retaining refusal needs proof
 # before it stops anything: 0 only when the run is proven not to need the
-# worker (a local-only task never drives the pipeline, no-mistakes absent,
-# the project not initialized for it, the CLI's positive no-run answer for
-# this branch - exit 0 with `runs_on_current_branch: 0`, or its no-runs-yet
-# line for a project with no run at all - this branch's run terminal, or the
-# current-branch run belonging to another branch), 1 when this branch's run
-# is parked at a gate or still under way (TASK_RUN_ID names it), 2 when the
-# query timed out, failed, or answered with nothing this reader can
-# classify.
+# worker (a local-only or direct-PR task never drives the pipeline,
+# no-mistakes absent, the project not initialized for it, the CLI's positive
+# no-run answer for this branch - exit 0 with `runs_on_current_branch: 0` -
+# this branch's run terminal, or the current-branch run belonging to another
+# branch), 1 when this branch's run is parked at a gate or still under way
+# (TASK_RUN_ID names it), 2 when the query timed out, failed, or answered
+# with nothing this reader can classify.
 refusal_run_needs_worker() {  # <worktree> -> 0 no, 1 yes, 2 cannot tell
   local wt=$1 out branch run_id run_branch status outcome awaiting has_gate on_branch
   TASK_RUN_ID=
   [ "$KIND" = ship ] || return 0
-  [ "$MODE" != local-only ] || return 0
+  case "$MODE" in
+    local-only|direct-PR) return 0 ;;
+  esac
   command -v no-mistakes >/dev/null 2>&1 || return 0
   branch=$(git -C "$wt" symbolic-ref --quiet --short HEAD 2>/dev/null) || return 2
   [ -n "$branch" ] || return 2
@@ -1695,9 +1696,6 @@ refusal_run_needs_worker() {  # <worktree> -> 0 no, 1 yes, 2 cannot tell
   if [ -z "$run_id" ]; then
     on_branch=$(fm_nm_strip_quotes "$(fm_nm_field "$out" runs_on_current_branch)")
     [ "$on_branch" != 0 ] || return 0
-    case "$(fm_nm_trim "$out")" in
-      'no runs yet'*) return 0 ;;
-    esac
     return 2
   fi
   run_branch=$(fm_nm_strip_quotes "$(fm_nm_field "$out" branch)")
