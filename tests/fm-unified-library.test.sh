@@ -97,8 +97,6 @@ chmod +x "$FAKEBIN/node"
 run_adapter() {
   PATH="$FAKEBIN:$PATH" \
     FM_OSBAMBAM_ROOT="$OSBAMBAM" \
-    FM_UNIFIED_LIBRARY_PY="$LIBRARY_PY" \
-    FM_BRAIN_JS="$BRAIN_JS" \
     FM_UL_CALLS="$CALLS" \
     "$ADAPTER" "$@"
 }
@@ -120,7 +118,7 @@ test_search_reports_no_verified_card() {
   out=$(run_adapter search "adapter lookup contract")
   assert_contains "$out" '"verified_finding": "no verified relevant card"' \
     "search with only drafts did not report the no-verified-card finding"
-  assert_contains "$out" '"verified_present": false' \
+  assert_not_contains "$out" '"status": "verified"' \
     "search with only drafts claimed a verified card"
   assert_contains "$out" '"drafts_are_prior_art": true' \
     "search did not mark drafts as prior art"
@@ -166,9 +164,8 @@ test_search_marks_verified_hit() {
   out=$(run_adapter search "verified-hit adapter")
   assert_grep "search verified-hit adapter --limit 3" "$CALLS" \
     "verified hit search passed extra arguments to library.py"
-  assert_contains "$out" '"verified_present": true' \
-    "verified hit was not marked present"
-  assert_contains "$out" '"verified_count": 1' "verified hit was not counted"
+  assert_contains "$out" '"card_id": "CARD-VERIFIED-1"' "verified hit card was dropped"
+  assert_contains "$out" '"status": "verified"' "verified hit lost its card status"
   assert_not_contains "$out" "no verified relevant card" \
     "verified hit still reported no verified card"
   pass "search marks a verified hit without a status filter"

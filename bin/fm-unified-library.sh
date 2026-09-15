@@ -19,11 +19,10 @@
 #   fm-unified-library.sh --help
 #
 # Environment:
-#   FM_OSBAMBAM_ROOT       OSBAMBAM root. Defaults to
-#                          /Users/brycemajdick/Desktop/OSBAMBAM when that
-#                          directory exists.
-#   FM_UNIFIED_LIBRARY_PY  Override path to library.py (tests).
-#   FM_BRAIN_JS            Override path to brain.js (tests).
+#   FM_OSBAMBAM_ROOT  OSBAMBAM root. Defaults to
+#                     /Users/brycemajdick/Desktop/OSBAMBAM when that
+#                     directory exists. library.py and brain.js are
+#                     derived from it.
 #
 # Search always requests three cards and open always uses a 4000 budget, the
 # contract's fixed lookup surface. The library CLI already orders
@@ -60,22 +59,6 @@ resolve_osbambam_root() {
     return 0
   fi
   die "OSBAMBAM root not found; set FM_OSBAMBAM_ROOT"
-}
-
-resolve_library_py() {
-  if [ -n "${FM_UNIFIED_LIBRARY_PY:-}" ]; then
-    printf '%s\n' "$FM_UNIFIED_LIBRARY_PY"
-    return 0
-  fi
-  printf '%s\n' "$OSBAMBAM_ROOT/os/scripts/library.py"
-}
-
-resolve_brain_js() {
-  if [ -n "${FM_BRAIN_JS:-}" ]; then
-    printf '%s\n' "$FM_BRAIN_JS"
-    return 0
-  fi
-  printf '%s\n' "$OSBAMBAM_ROOT/rubric-second-brain/brain.js"
 }
 
 require_file() {
@@ -121,10 +104,6 @@ cards = data.get("cards") or []
 if not isinstance(cards, list):
     cards = []
 verified = [c for c in cards if isinstance(c, dict) and c.get("status") == "verified"]
-drafts = [c for c in cards if isinstance(c, dict) and c.get("status") == "draft"]
-data["verified_present"] = bool(verified)
-data["verified_count"] = len(verified)
-data["draft_count"] = len(drafts)
 if not verified:
     data["verified_finding"] = "no verified relevant card"
 data["adapter"] = {
@@ -267,8 +246,8 @@ case "$1" in
 esac
 
 OSBAMBAM_ROOT="$(resolve_osbambam_root)"
-LIBRARY_PY="$(resolve_library_py)"
-BRAIN_JS="$(resolve_brain_js)"
+LIBRARY_PY="$OSBAMBAM_ROOT/os/scripts/library.py"
+BRAIN_JS="$OSBAMBAM_ROOT/rubric-second-brain/brain.js"
 
 case "$1" in
   recall) shift; cmd_recall "$@" ;;
