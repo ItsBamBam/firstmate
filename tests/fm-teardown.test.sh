@@ -1166,7 +1166,87 @@ test_dirty_worktree_refuses() {
   grep -q "uncommitted changes" "$case_dir/stderr" || fail "dirty-wt: refusal did not cite uncommitted changes"
   grep -q "bin/fm-captain-hold.sh hold task-x1 --reason" "$case_dir/stderr" \
     || fail "dirty-wt: refusal did not point at holding the task for the captain's discard OK: $(cat "$case_dir/stderr")"
+  grep -q "bin/fm-captain-hold.sh hold <new-id> --title '<title>' --origin task-x1 --reason" "$case_dir/stderr" \
+    || fail "dirty-wt: refusal did not name the new-call form an already-closed task needs: $(cat "$case_dir/stderr")"
   pass "dirty worktree is refused even when its committed work has landed (dirty always wins), and the refusal names the hold that bounds the wait"
+}
+
+# Record every tmux invocation so a test can prove whether the task's window
+# was closed. Args: case_dir
+add_logging_tmux() {
+  local case_dir=$1
+  cat > "$case_dir/fakebin/tmux" <<SH
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "$case_dir/tmux.log"
+exit 0
+SH
+  chmod +x "$case_dir/fakebin/tmux"
+}
+
+# The orphan-worker half of the 2026-09-15 incident: a worker finished with
+# done:, its work landed, and cleanup was refused for leftover uncommitted
+# files - before any endpoint close ran - so the finished agent stayed alive in
+# its window for hours. A dirty refusal now closes a concluded worker's
+# endpoint while keeping the copy, its edits, and the record; a worker whose
+# newest line is not terminal is still never stopped by a refusal.
+test_dirty_worktree_refusal_stops_a_concluded_worker() {
+  local case_dir rc pr_head
+  case_dir=$(make_case dirty-wt-concluded)
+  write_meta "$case_dir" no-mistakes ship
+  printf '%s\n' 'pr=https://github.com/example/repo/pull/7' >> "$case_dir/state/task-x1.meta"
+  printf 'blocked: stopped on request; branch preserved\nworking: resumed\ndone: validation green, ready to land\n' \
+    > "$case_dir/state/task-x1.status"
+  wt_commit_file "$case_dir" feature.txt hello "add feature"
+  land_on_origin_main "$case_dir" feature.txt hello
+  pr_head=$(git -C "$case_dir/wt" rev-parse HEAD)
+  add_gh_pr_merged_for_head "$case_dir" "$pr_head"
+  printf '%s\n' "uncommitted edit" > "$case_dir/wt/feature.txt"
+  add_logging_tmux "$case_dir"
+
+  set +e
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 1 "$rc" "dirty-wt-concluded: teardown should still refuse the dirty worktree"
+  grep -q "uncommitted changes" "$case_dir/stderr" || fail "dirty-wt-concluded: refusal did not cite uncommitted changes"
+  grep -Fq "kill-window -t =firstmate:=fm-task-x1" "$case_dir/tmux.log" 2>/dev/null \
+    || fail "dirty-wt-concluded: the finished worker's window was left running: $(cat "$case_dir/tmux.log" 2>/dev/null)"
+  grep -q "Stopped the finished worker at firstmate:fm-task-x1" "$case_dir/stderr" \
+    || fail "dirty-wt-concluded: refusal did not report the stop: $(cat "$case_dir/stderr")"
+  assert_refusal_retained_task_state "$case_dir" dirty-wt-concluded "$pr_head"
+  [ "$(cat "$case_dir/wt/feature.txt")" = "uncommitted edit" ] \
+    || fail "dirty-wt-concluded: the stop discarded the uncommitted edit"
+  pass "a dirty refusal closes a concluded worker's endpoint and keeps its copy, edits, and record"
+}
+
+test_dirty_worktree_refusal_keeps_a_live_worker() {
+  local case_dir rc pr_head
+  case_dir=$(make_case dirty-wt-live)
+  write_meta "$case_dir" no-mistakes ship
+  printf '%s\n' 'pr=https://github.com/example/repo/pull/7' >> "$case_dir/state/task-x1.meta"
+  printf 'done: first milestone\nblocked: recover refused again; handoff written\n' \
+    > "$case_dir/state/task-x1.status"
+  wt_commit_file "$case_dir" feature.txt hello "add feature"
+  land_on_origin_main "$case_dir" feature.txt hello
+  pr_head=$(git -C "$case_dir/wt" rev-parse HEAD)
+  add_gh_pr_merged_for_head "$case_dir" "$pr_head"
+  printf '%s\n' "uncommitted edit" > "$case_dir/wt/feature.txt"
+  add_logging_tmux "$case_dir"
+
+  set +e
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 1 "$rc" "dirty-wt-live: teardown should refuse the dirty worktree"
+  if grep -q "kill-window" "$case_dir/tmux.log" 2>/dev/null; then
+    fail "dirty-wt-live: a refusal stopped a worker whose newest line is not terminal: $(cat "$case_dir/tmux.log")"
+  fi
+  ! grep -q "Stopped the finished worker" "$case_dir/stderr" \
+    || fail "dirty-wt-live: refusal claimed to stop a live worker: $(cat "$case_dir/stderr")"
+  assert_refusal_retained_task_state "$case_dir" dirty-wt-live "$pr_head"
+  pass "a dirty refusal never stops a worker whose newest status line is not terminal"
 }
 
 test_gh_error_and_content_absent_refuses() {
@@ -3704,6 +3784,8 @@ test_pr_check_records_remote_head_when_local_lags
 test_content_in_default_fallback_allows
 test_content_fallback_refreshes_stale_origin_ref
 test_dirty_worktree_refuses
+test_dirty_worktree_refusal_stops_a_concluded_worker
+test_dirty_worktree_refusal_keeps_a_live_worker
 test_gh_error_and_content_absent_refuses
 test_legacy_record_without_the_flag_refuses
 test_legacy_record_teardown_completes_when_landed_and_endpoint_dead

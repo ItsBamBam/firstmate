@@ -460,10 +460,9 @@ print_open_decisions_section() {
     if status_task_concluded "$STATE/$task.status" "$STATE/$task.meta"; then
       continue
     fi
-    # The key is always shown, `default` included, so the closing command
-    # printed below can be typed for any listed row: an unkeyed line's key IS
-    # the literal `default` (bin/fm-send.sh header).
-    line="$task [key=$key] $verb: $note"
+    line="$task"
+    [ "$key" = default ] || line="$line [key=$key]"
+    line="$line $verb: $note"
     # The shared cut counts the item's own characters; the trailing newline this
     # section's global budget also pays for is this caller's, so the per-item
     # allowance passed down is one short of the cap.

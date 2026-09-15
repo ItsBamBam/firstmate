@@ -1655,6 +1655,26 @@ teardown_treehouse_return() {
   return 1
 }
 
+# A refusal that keeps the isolated copy for the captain's discard decision
+# must not keep the finished worker running in it: its endpoint is closed here
+# when the task's own worker has concluded (bin/fm-classify-lib.sh's
+# status_task_concluded), the same best-effort close a completed teardown ends
+# with, while the copy, its uncommitted changes, and every durable record stay.
+# A worker that is still live is never stopped by a refusal.
+stop_concluded_worker_for_refusal() {
+  status_task_concluded "$STATE/$ID.status" "$META" || return 0
+  [ "$BACKEND" != orca ] || [ -n "$T_ORCA" ] || return 0
+  fm_backend_kill "$BACKEND" "$T" "$(meta_value "$META" zellij_tab_id)" "fm-$ID" 2>/dev/null || true
+  echo "Stopped the finished worker at $T; the worktree, its uncommitted changes, and the task record are retained." >&2
+}
+
+# A held task is what keeps a refused, finished task from re-surfacing as
+# stale until the captain decides; a backlog row already closed cannot be
+# re-held, so the call then needs its own task id with this one as origin.
+print_hold_hint_for_refusal() {
+  echo "While that OK is pending, hold the task for it: bin/fm-captain-hold.sh hold $ID --reason '<what needs the OK>' - or, when $ID is already closed in the backlog, mint the call: bin/fm-captain-hold.sh hold <new-id> --title '<title>' --origin $ID --reason '<what needs the OK>'." >&2
+}
+
 validate_worktree_teardown_safety() {
   local dirty_raw dirty unpushed_raw unpushed DEFAULT unmerged_raw unmerged branch
   [ -d "$WT" ] || return 0
@@ -1699,13 +1719,18 @@ validate_worktree_teardown_safety() {
       [ -n "$dirty" ] && echo "uncommitted changes present" >&2
       [ -n "$unmerged" ] && printf 'commits not yet on %s:\n%s\n' "$DEFAULT" "$unmerged" >&2
       echo "Merge the branch into local $DEFAULT first (bin/fm-merge-local.sh after the captain approves), or push to a fork/remote, or get the captain's explicit OK to discard, then --force." >&2
+      if [ -n "$dirty" ]; then
+        print_hold_hint_for_refusal
+        stop_concluded_worker_for_refusal
+      fi
       return 1
     fi
   elif [ -n "$dirty" ]; then
     echo "REFUSED: worktree $WT has uncommitted changes." >&2
     echo "uncommitted changes present" >&2
     echo "Commit them (or get the captain's explicit OK to discard, then --force)." >&2
-    echo "While that OK is pending, hold the task for it: bin/fm-captain-hold.sh hold $ID --reason '<what needs the OK>' - the held call is what keeps this finished task's idle endpoint from re-surfacing as stale until the captain decides." >&2
+    print_hold_hint_for_refusal
+    stop_concluded_worker_for_refusal
     return 1
   elif [ -n "$unpushed" ]; then
     branch=${TEARDOWN_WORKTREE_BRANCH_FOR_SAFETY:-}

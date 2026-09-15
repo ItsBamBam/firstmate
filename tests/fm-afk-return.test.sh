@@ -255,6 +255,45 @@ EOF
   pass "needs-decision remains reportable without masquerading as a firstmate-actionable blocker"
 }
 
+# The 2026-09-15 incident: a worker wrote an unkeyed blocked: line, was steered
+# past it, and finished with done:; the record survived because cleanup was
+# refused, and every return check kept holding the gate on that stale row and
+# re-listing it as still blocked. A concluded single-owner task's leftover rows
+# are retired from the gate and the brief; a live task's and a secondmate's
+# are not.
+test_concluded_task_rows_do_not_hold_the_return_gate() {
+  local dir out rc
+  dir="$TMP_ROOT/concluded-task"
+  install_runner "$dir"
+  printf 'window=synthetic:fm-landed\nbackend=tmux\nkind=ship\n' > "$dir/home/state/landed.meta"
+  printf 'blocked: stopped on request; branch preserved\nworking: resumed after the steer\ndone: local validation green\n' \
+    > "$dir/home/state/landed.status"
+  printf 'window=synthetic:fm-gave-up\nbackend=tmux\nkind=ship\n' > "$dir/home/state/gave-up.meta"
+  printf 'needs-decision [key=scope]: widen or not\nfailed: giving up, see report\n' > "$dir/home/state/gave-up.status"
+  printf 'window=synthetic:fm-mate\nbackend=tmux\nkind=secondmate\n' > "$dir/home/state/mate.meta"
+  printf 'needs-decision [key=route]: choose a route\ndone: heartbeat complete\n' > "$dir/home/state/mate.status"
+  date +%s > "$dir/home/state/.afk"
+  : > "$dir/home/state/.fake-drain"
+
+  out=$(run_return "$dir" begin) || fail "a concluded task's stale blocker held the return gate: $out"
+  [ ! -e "$dir/home/state/.afk-return-catchup" ] || fail "a concluded task's stale blocker opened a catch-up gate"
+  case "$out" in
+    *'landed'*'blocked'*) fail "the brief re-listed a concluded task's stale blocker: $out" ;;
+    *'gave-up [key=scope] needs your decision'*) fail "the brief re-listed a failed task's stale decision: $out" ;;
+  esac
+  assert_contains "$out" 'mate [key=route] needs your decision: choose a route' "a secondmate's open decision was retired by its own terminal line"
+
+  # The same task becomes live again once its newest line is a fresh blocker.
+  printf 'blocked [key=leftover]: cleanup refused; leftover files need the captain\n' >> "$dir/home/state/landed.status"
+  set +e
+  out=$(run_return "$dir" check)
+  rc=$?
+  set -e
+  [ "$rc" -eq 3 ] || fail "a fresh newest blocker on the same task did not hold the gate (rc=$rc): $out"
+  assert_contains "$out" 'firstmate-actionable blocker: landed [key=leftover]' "the live blocker was not assigned to Firstmate"
+  pass "a concluded task's leftover rows neither hold the return gate nor re-list in the brief; a live blocker still does"
+}
+
 test_evidence_publication_failure_preserves_wake_for_redrain() {
   local dir out rc gate
   dir="$TMP_ROOT/evidence-publication-failure"
@@ -787,6 +826,7 @@ test_missing_final_archive_keeps_retained_contract_gated() {
 test_return_gate_owns_remediation_and_reports_catchup_to_bearings
 test_explicit_reclassification_requires_durable_reason
 test_captain_decision_does_not_masquerade_as_firstmate_blocker
+test_concluded_task_rows_do_not_hold_the_return_gate
 test_evidence_publication_failure_preserves_wake_for_redrain
 test_away_reentry_refuses_pending_return_gate
 test_return_is_mode_agnostic_for_quiet_mode

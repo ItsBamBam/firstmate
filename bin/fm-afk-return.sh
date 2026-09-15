@@ -25,7 +25,11 @@
 # THE GATE. `blocked:` is the crewmate protocol's firstmate-actionable verb. A
 # live task's open blocked event must be remediated and closed with
 # `resolved [key=...]`, or explicitly reclassified in the status stream with a
-# durable reason, before an ordinary captain request may proceed.
+# durable reason, before an ordinary captain request may proceed. A task whose
+# own worker has concluded (bin/fm-classify-lib.sh's status_task_concluded:
+# newest line done:/failed: on a single-owner task) is not live: its leftover
+# blocked and needs-decision rows are history nobody can still act on, so
+# neither the gate nor the brief lists them.
 # `needs-decision:` is deliberately not part of this blocker gate. The gate
 # keeps every open blocker until that blocker's own resolution is proven.
 # Captain-verdict outcomes are listed under "waiting on you", but cannot exempt
@@ -179,6 +183,9 @@ scan_open_blockers() {  # -> tab-separated blocker rows
     if ! status_path_readable "$status"; then
       STATUS_SCAN_ERROR=$status
       return 1
+    fi
+    if status_task_concluded "$status" "$meta"; then
+      continue
     fi
     if ! open=$(status_open_decisions "$status"); then
       STATUS_SCAN_ERROR=$status
@@ -469,6 +476,9 @@ render_return_brief() {  # <evidence-file> <blockers-file> <since-epoch>
     task=$(basename "$meta"); task=${task%.meta}
     status="$STATE/$task.status"
     status_path_readable "$status" || continue
+    if status_task_concluded "$status" "$meta"; then
+      continue
+    fi
     while IFS="$(printf '\t')" read -r key verb summary; do
       [ "$verb" = needs-decision ] || continue
       count=$((count + 1))

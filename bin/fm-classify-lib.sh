@@ -143,9 +143,11 @@ last_status_line() {
 # proves nothing about another and it is never concluded here.
 #
 # Single owner of that rule for every consumer that retires a concluded task's
-# leftover status-log decisions: bin/fm-wake-drain.sh's OPEN DECISIONS section
-# and bin/fm-captain-hold.sh's origin gate (bin/fm-fleet-snapshot.sh clears on
-# the reconciled crew state instead, which already covers this terminal read).
+# leftover status-log decisions: bin/fm-wake-drain.sh's OPEN DECISIONS section,
+# bin/fm-afk-return.sh's blocker gate and return brief, bin/fm-captain-hold.sh's
+# origin gate, and bin/fm-teardown.sh's finished-worker stop at a dirty-copy
+# refusal (bin/fm-fleet-snapshot.sh clears on the reconciled crew state
+# instead, which already covers this terminal read).
 # It deliberately reads only the last line, not the fold: a still-open
 # needs-decision/blocked row on a concluded task is history the worker already
 # moved past, and re-presenting it as an answerable decision is what kept

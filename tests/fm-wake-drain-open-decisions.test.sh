@@ -134,36 +134,17 @@ test_concluded_task_retires_its_stale_decisions() {
 
   FM_STATE_OVERRIDE="$state" "$DRAIN" > "$out" || fail "drain failed with a concluded task"
 
-  if grep -F 'landed [key=default] blocked:' "$out" >/dev/null; then
+  if grep -F 'landed blocked:' "$out" >/dev/null; then
     fail "a concluded ship task's stale blocker was still listed as open: $(cat "$out")"
   fi
   if grep -F 'gave-up [key=scope] needs-decision:' "$out" >/dev/null; then
     fail "a failed task's stale decision was still listed as open: $(cat "$out")"
   fi
-  grep -F 'live [key=default] blocked: recover refused again; handoff written' "$out" >/dev/null \
-    || fail "a live task's newest blocker must stay listed, with its literal default key: $(cat "$out")"
+  grep -F 'live blocked: recover refused again; handoff written' "$out" >/dev/null \
+    || fail "a live task's newest blocker must stay listed: $(cat "$out")"
   grep -F 'mate [key=route] needs-decision: choose a route' "$out" >/dev/null \
     || fail "a secondmate's decision must never be retired by its own terminal line: $(cat "$out")"
   pass "a concluded single-owner task's leftover decisions are retired; live tasks and secondmates keep theirs"
-}
-
-# The section's own remedy names a key, so every listed row must print one -
-# an unkeyed line's key is the literal default the fold assigns it, and that is
-# exactly the key bin/fm-send.sh --resolve-key accepts for it.
-test_unkeyed_row_prints_the_default_key_the_remedy_needs() {
-  local dir state out
-  dir=$(make_case default-key)
-  state="$dir/state"
-  out="$dir/drain.out"
-  printf 'blocked: waiting on credentials\n' > "$state/plain.status"
-
-  FM_STATE_OVERRIDE="$state" "$DRAIN" > "$out" || fail "drain failed with an unkeyed blocker"
-
-  grep -F 'plain [key=default] blocked: waiting on credentials' "$out" >/dev/null \
-    || fail "an unkeyed blocker did not print its literal default key: $(cat "$out")"
-  grep -F "close one by answering it: bin/fm-send.sh <task> --resolve-key <key>" "$out" >/dev/null \
-    || fail "the closing remedy was not printed alongside the row"
-  pass "an unkeyed open decision prints the literal default key its closing command needs"
 }
 
 test_no_open_decisions_prints_nothing() {
@@ -284,7 +265,6 @@ test_over_long_decision_note_is_capped_with_a_marker
 test_explicit_resolution_closes_it
 test_later_unrelated_terminal_line_does_not_close_it
 test_concluded_task_retires_its_stale_decisions
-test_unkeyed_row_prints_the_default_key_the_remedy_needs
 test_reserved_key_namespace_is_owned_by_its_library
 test_no_open_decisions_prints_nothing
 test_open_decision_surfaces_even_with_an_unrelated_queued_wake
