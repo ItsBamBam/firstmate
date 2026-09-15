@@ -67,6 +67,28 @@ test_stated_key_is_honored_in_both_positions() {
   pass "a stated [key=X] opens X whether it precedes or follows the verb colon"
 }
 
+test_concluded_reads_only_the_newest_line_of_a_single_owner_task() {
+  local d f meta
+  d=$(case_dir concluded); f="$d/task.status"; meta="$d/task.meta"
+  printf 'blocked: stopped on request\nworking: resumed\ndone: validation green\n' > "$f"
+  status_task_concluded "$f" || fail "a done: newest line without any meta should read as concluded (ship by default)"
+  printf 'kind=scout\n' > "$meta"
+  status_task_concluded "$f" "$meta" || fail "a scout with a done: newest line should read as concluded"
+  printf 'kind=secondmate\n' > "$meta"
+  if status_task_concluded "$f" "$meta"; then
+    fail "a secondmate must never read as concluded from its multiplexed stream"
+  fi
+  printf 'kind=ship\n' > "$meta"
+  printf 'blocked: recover refused again\n' >> "$f"
+  if status_task_concluded "$f" "$meta"; then
+    fail "a newest blocked: line means the task is still live, not concluded"
+  fi
+  printf 'failed [key=x]: giving up\n\n' >> "$f"
+  status_task_concluded "$f" "$meta" || fail "a failed: newest line (trailing blank tolerated) should read as concluded"
+  assert_fold "$f" "$(printf 'default\tblocked\trecover refused again')" "conclusion never edits the fold itself: the leftover blocker still folds open"
+  pass "status_task_concluded reads the newest line of a single-owner task and never a secondmate"
+}
+
 test_bare_keyless_line_still_folds_to_default() {
   local dir
   dir=$(case_dir keyless)
@@ -264,6 +286,7 @@ test_incremental_agrees_with_full_fold_across_appends() {
 
 test_stated_key_is_honored_in_both_positions
 test_bare_keyless_line_still_folds_to_default
+test_concluded_reads_only_the_newest_line_of_a_single_owner_task
 test_resolution_closes_across_positions
 test_blocked_is_position_tolerant_like_needs_decision
 test_two_colon_form_decisions_stay_distinct

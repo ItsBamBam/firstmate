@@ -135,6 +135,34 @@ last_status_line() {
   grep -v '^[[:space:]]*$' "$f" 2>/dev/null | tail -1
 }
 
+# status_task_concluded <status-file> [meta-file]: 0 when the task's own worker
+# has concluded - its newest status line is a terminal `done:` or `failed:` -
+# and the task is a single-owner crewmate or scout (meta kind other than
+# secondmate; an absent meta or kind reads as ship). A persistent secondmate
+# multiplexes many concerns onto one stream, so its terminal line on one concern
+# proves nothing about another and it is never concluded here.
+#
+# Single owner of that rule for every consumer that retires a concluded task's
+# leftover status-log decisions: bin/fm-wake-drain.sh's OPEN DECISIONS section
+# and bin/fm-captain-hold.sh's origin gate (bin/fm-fleet-snapshot.sh clears on
+# the reconciled crew state instead, which already covers this terminal read).
+# It deliberately reads only the last line, not the fold: a still-open
+# needs-decision/blocked row on a concluded task is history the worker already
+# moved past, and re-presenting it as an answerable decision is what kept
+# landed and duplicate-closed work looking active (observed 2026-09-15).
+status_task_concluded() {  # <status-file> [meta-file]
+  local status_file=$1 meta_file=${2:-} kind='' verb
+  if [ -n "$meta_file" ] && [ -f "$meta_file" ]; then
+    kind=$(grep '^kind=' "$meta_file" 2>/dev/null | tail -1 | cut -d= -f2-)
+  fi
+  [ "${kind:-ship}" != secondmate ] || return 1
+  verb=$(status_line_verb "$(last_status_line "$status_file")")
+  case "$verb" in
+    done|failed) return 0 ;;
+  esac
+  return 1
+}
+
 # 0 if the given (last) status line's leading verb is a real terminal captain verb
 # (done, needs-decision, blocked, failed). Free-text tokens alone never count here;
 # callers that need legacy free-text matching use status_is_captain_relevant.

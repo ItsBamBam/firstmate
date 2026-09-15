@@ -242,12 +242,20 @@ test_routine_steer_never_closes() {
 
   run_send "$fb" "$home" "$log" t3 "unrelated nudge, keep going"; rc=$?
   expect_code 0 "$rc" "a routine steer should still succeed"
-  printf 'working: resumed\n' >> "$home/state/t3.status"
-  printf 'done: unrelated milestone\n' >> "$home/state/t3.status"
+  # The task stays live past the done: milestone; only a task whose NEWEST
+  # line is terminal retires its rows from the listing (the fold itself never
+  # closes on done: - asserted directly below).
+  {
+    printf 'working: resumed\n'
+    printf 'done: unrelated milestone\n'
+    printf 'working: continuing past the milestone\n'
+  } >> "$home/state/t3.status"
 
   if grep -F 'resolved' "$home/state/t3.status" >/dev/null; then
     fail "a routine steer wrote a resolved line: $(cat "$home/state/t3.status")"
   fi
+  bash -c '. "$1"; status_open_decisions "$2"' _ "$ROOT/bin/fm-classify-lib.sh" "$home/state/t3.status" | grep -F 'schema' >/dev/null \
+    || fail "a routine steer or a later working/done line closed the decision in the fold: $(cat "$home/state/t3.status")"
   out=$(drain_out "$home")
   printf '%s' "$out" | grep -F '[key=schema]' >/dev/null \
     || fail "a routine steer (or later working/done lines) cleared an unanswered captain decision: $out"

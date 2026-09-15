@@ -91,15 +91,79 @@ test_later_unrelated_terminal_line_does_not_close_it() {
   state="$dir/state"
   out="$dir/drain.out"
   # A later done: with no matching [key=...] token opens/closes only the
-  # "default" key; it must never clear the still-open api-shape decision.
+  # "default" key; it must never clear the still-open api-shape decision. The
+  # task is still live afterwards (its newest line is not terminal), so the
+  # section must keep listing the decision; only a task whose newest line is
+  # terminal retires its rows (test_concluded_task_retires_its_stale_decisions).
   printf 'needs-decision [key=api-shape]: pick REST or RPC\n' > "$state/task3.status"
   printf 'done: unrelated later milestone\n' >> "$state/task3.status"
+  printf 'working: continuing past that milestone\n' >> "$state/task3.status"
 
   FM_STATE_OVERRIDE="$state" "$DRAIN" > "$out" || fail "drain failed after an unrelated terminal line"
 
   grep -F 'task3' "$out" | grep -F '[key=api-shape]' | grep -F 'pick REST or RPC' >/dev/null \
     || fail "a later unrelated terminal line incorrectly cleared the open decision"
-  pass "a later unrelated terminal line never clears an open decision"
+  pass "a later unrelated terminal line never clears an open decision of a still-live task"
+}
+
+# The 2026-09-15 incident: a worker wrote unkeyed blocked: lines, was steered
+# past them, and finished with done:; the task then landed while cleanup was
+# refused for leftover files, and every drain re-listed the stale blocker as an
+# answerable decision for hours. A concluded single-owner task's leftover rows
+# are retired from the section; a live task's and a secondmate's are not.
+test_concluded_task_retires_its_stale_decisions() {
+  local dir state out
+  dir=$(make_case concluded-task)
+  state="$dir/state"
+  out="$dir/drain.out"
+  printf 'blocked: stopped on request; branch preserved\n' > "$state/landed.status"
+  printf 'working: resumed after the steer\n' >> "$state/landed.status"
+  printf 'done: local validation green, ready to land\n' >> "$state/landed.status"
+  printf 'kind=ship\n' > "$state/landed.meta"
+  # A failed worker is concluded too, and an absent meta reads as a ship task.
+  printf 'needs-decision [key=scope]: widen or not\n' > "$state/gave-up.status"
+  printf 'failed: giving up, see report\n' >> "$state/gave-up.status"
+  # Still live: the blocker is the newest line, so it is a real open decision.
+  printf 'done: first milestone\n' > "$state/live.status"
+  printf 'blocked: recover refused again; handoff written\n' >> "$state/live.status"
+  printf 'kind=ship\n' > "$state/live.meta"
+  # A secondmate's terminal line on one concern never retires another concern.
+  printf 'needs-decision [key=route]: choose a route\n' > "$state/mate.status"
+  printf 'done: heartbeat complete\n' >> "$state/mate.status"
+  printf 'kind=secondmate\n' > "$state/mate.meta"
+
+  FM_STATE_OVERRIDE="$state" "$DRAIN" > "$out" || fail "drain failed with a concluded task"
+
+  if grep -F 'landed [key=default] blocked:' "$out" >/dev/null; then
+    fail "a concluded ship task's stale blocker was still listed as open: $(cat "$out")"
+  fi
+  if grep -F 'gave-up [key=scope] needs-decision:' "$out" >/dev/null; then
+    fail "a failed task's stale decision was still listed as open: $(cat "$out")"
+  fi
+  grep -F 'live [key=default] blocked: recover refused again; handoff written' "$out" >/dev/null \
+    || fail "a live task's newest blocker must stay listed, with its literal default key: $(cat "$out")"
+  grep -F 'mate [key=route] needs-decision: choose a route' "$out" >/dev/null \
+    || fail "a secondmate's decision must never be retired by its own terminal line: $(cat "$out")"
+  pass "a concluded single-owner task's leftover decisions are retired; live tasks and secondmates keep theirs"
+}
+
+# The section's own remedy names a key, so every listed row must print one -
+# an unkeyed line's key is the literal default the fold assigns it, and that is
+# exactly the key bin/fm-send.sh --resolve-key accepts for it.
+test_unkeyed_row_prints_the_default_key_the_remedy_needs() {
+  local dir state out
+  dir=$(make_case default-key)
+  state="$dir/state"
+  out="$dir/drain.out"
+  printf 'blocked: waiting on credentials\n' > "$state/plain.status"
+
+  FM_STATE_OVERRIDE="$state" "$DRAIN" > "$out" || fail "drain failed with an unkeyed blocker"
+
+  grep -F 'plain [key=default] blocked: waiting on credentials' "$out" >/dev/null \
+    || fail "an unkeyed blocker did not print its literal default key: $(cat "$out")"
+  grep -F "close one by answering it: bin/fm-send.sh <task> --resolve-key <key>" "$out" >/dev/null \
+    || fail "the closing remedy was not printed alongside the row"
+  pass "an unkeyed open decision prints the literal default key its closing command needs"
 }
 
 test_no_open_decisions_prints_nothing() {
@@ -219,6 +283,8 @@ test_buried_decision_still_surfaces
 test_over_long_decision_note_is_capped_with_a_marker
 test_explicit_resolution_closes_it
 test_later_unrelated_terminal_line_does_not_close_it
+test_concluded_task_retires_its_stale_decisions
+test_unkeyed_row_prints_the_default_key_the_remedy_needs
 test_reserved_key_namespace_is_owned_by_its_library
 test_no_open_decisions_prints_nothing
 test_open_decision_surfaces_even_with_an_unrelated_queued_wake

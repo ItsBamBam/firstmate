@@ -223,6 +223,8 @@ An environment variable alone is not reliable when another Herdr server is runni
 When the selected named server is not running, the adapter launches it without inherited Firstmate home and directory overrides, harness identity markers, or the supervision-model override.
 Herdr passes its server startup environment to every later pane, so retaining those values could misroute panes for another Firstmate home or harness.
 An already-running server is reused without restart or environment changes.
+`herdr server` does not daemonize itself, so the adapter launches it detached: the binary is exec'd from a backgrounded job whose parent shell exits at once, leaving the server reparented to init in its own process group with no launcher shell waiting on it.
+Backgrounding a shell function there instead leaves a copy of the launching script alive as the server's parent for the server's whole lifetime, which is how a `bin/fm-spawn.sh` process for a long-parked task was found running for hours as the parent of the fleet's default server (2026-09-15); `tests/fm-backend-herdr.test.sh` pins the detached shape and `docs/verification/runtime-backends.md` records the live process tree.
 Explicit named-session routing and unrelated launch environment remain intact.
 
 Literal text and Enter are separate operations on `fm-send.sh`'s typed plane; ordinary local text steers instead use the durable steering inbox and send only its best-effort constant doorbell through this adapter.

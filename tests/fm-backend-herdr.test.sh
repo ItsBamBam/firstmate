@@ -1104,6 +1104,76 @@ test_server_ensure_scrubs_home_and_harness_identity() {
   pass "fm_backend_herdr_server_ensure: scrubs home and harness identity without disturbing unrelated environment or session routing"
 }
 
+# make_herdr_server_linger_fakebin: a stateful server stub whose `server`
+# subcommand records its own process identity (pid, parent, process group) and
+# then lingers like the real headless server does, so a test can prove how the
+# adapter launched it. The stub exits on TERM; the test kills it by the
+# recorded pid.
+make_herdr_server_linger_fakebin() {  # <dir> -> echoes fakebin dir
+  local dir=$1 fb="$1/fakebin"
+  mkdir -p "$fb"
+  cat > "$fb/herdr" <<'SH'
+#!/usr/bin/env bash
+set -u
+case "${1:-}" in
+  status)
+    if [ -e "$FM_HERDR_SERVER_MARKER" ]; then
+      printf '{"server":{"running":true}}\n'
+    else
+      printf '{"server":{"running":false}}\n'
+    fi
+    ;;
+  server)
+    printf 'pid=%s\nppid=%s\npgid=%s\n' "$$" "$PPID" "$(ps -o pgid= -p "$$" | tr -d ' ')" > "$FM_HERDR_SERVER_ENV_LOG"
+    : > "$FM_HERDR_SERVER_MARKER"
+    trap 'exit 0' TERM
+    while :; do sleep 1; done
+    ;;
+esac
+SH
+  chmod +x "$fb/herdr"
+  printf '%s\n' "$fb"
+}
+
+# The headless server must outlive its launcher WITHOUT any launcher process
+# outliving the launch: observed 2026-09-15, a `bash bin/fm-spawn.sh <task>`
+# copy stayed alive 4.5h after its task was parked because it was the shell
+# that had backgrounded the server function and was waiting on it, and the
+# fleet's `herdr server --session default` sat in that launcher's process
+# group. After server_ensure returns, the launcher shell must have no child
+# left, and the server's parent and process group must both be outside it.
+test_server_ensure_detaches_server_from_launcher() {
+  local dir log marker fb report server_pid server_ppid server_pgid server_parent_cmd launcher_pid launcher_pgid launcher_cmd
+  dir="$TMP_ROOT/server-detach"; mkdir -p "$dir"; log="$dir/identity"; marker="$dir/running"; report="$dir/report"
+  fb=$(make_herdr_server_linger_fakebin "$dir")
+  PATH="$fb:$PATH" FM_HERDR_SERVER_ENV_LOG="$log" FM_HERDR_SERVER_MARKER="$marker" \
+    bash -c '
+      . "$0/bin/backends/herdr.sh"
+      fm_backend_herdr_server_ensure fmtest || exit 1
+      # What the launcher shell looks like right after the launch returned: its
+      # pid, process group, and command line. A forked copy of this shell would
+      # carry this exact command line, which is how the leaked launcher was
+      # recognized in the process table.
+      printf "launcher_pid=%s\nlauncher_pgid=%s\nlauncher_cmd=%s\n" "$$" "$(ps -o pgid= -p "$$" | tr -d " ")" "$(ps -o command= -p "$$")"
+    ' "$ROOT" > "$report"
+  expect_code 0 $? "server_ensure should start the lingering fake server"
+  server_pid=$(sed -n 's/^pid=//p' "$log")
+  server_ppid=$(sed -n 's/^ppid=//p' "$log")
+  server_pgid=$(sed -n 's/^pgid=//p' "$log")
+  launcher_pid=$(sed -n 's/^launcher_pid=//p' "$report")
+  launcher_pgid=$(sed -n 's/^launcher_pgid=//p' "$report")
+  launcher_cmd=$(sed -n 's/^launcher_cmd=//p' "$report")
+  [ -n "$server_pid" ] && [ -n "$launcher_pid" ] && [ -n "$launcher_cmd" ] || fail "server or launcher identity was not recorded (server='$server_pid' launcher='$launcher_pid' cmd='$launcher_cmd')"
+  kill -0 "$server_pid" 2>/dev/null || fail "the fake server did not linger after launch (pid $server_pid is gone), so this case proves nothing"
+  [ "$server_ppid" != "$launcher_pid" ] || fail "the server's parent is the launcher shell itself (pid $launcher_pid), so the launcher would live as long as the server"
+  server_parent_cmd=$(ps -o command= -p "$server_ppid" 2>/dev/null || true)
+  [ "$server_parent_cmd" != "$launcher_cmd" ] || fail "the server's parent (pid $server_ppid) is a live copy of the launcher shell; it will wait on the server for the server's whole lifetime"
+  [ "$server_pgid" != "$launcher_pgid" ] || fail "the server shares the launcher's process group $launcher_pgid, so killing the launch would kill the fleet's server"
+  [ "$server_pgid" = "$server_pid" ] || fail "the server should lead its own process group (pgid $server_pgid, pid $server_pid)"
+  kill -TERM "$server_pid" 2>/dev/null || true
+  pass "fm_backend_herdr_server_ensure: the launched server is reparented away from every launcher shell, in its own process group"
+}
+
 test_container_ensure_reuses_existing_workspace() {
   local dir log resp fb out
   dir="$TMP_ROOT/container-reuse"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
@@ -5247,6 +5317,7 @@ test_workspace_ensure_other_home_ignores_the_launcher_identity
 test_container_ensure_refuses_an_ambiguous_home_label
 test_container_ensure_starts_server_and_workspace
 test_server_ensure_scrubs_home_and_harness_identity
+test_server_ensure_detaches_server_from_launcher
 test_container_ensure_reuses_existing_workspace
 test_container_ensure_creates_with_no_focus_flag
 test_container_ensure_uses_secondmate_home_label

@@ -1705,6 +1705,7 @@ validate_worktree_teardown_safety() {
     echo "REFUSED: worktree $WT has uncommitted changes." >&2
     echo "uncommitted changes present" >&2
     echo "Commit them (or get the captain's explicit OK to discard, then --force)." >&2
+    echo "While that OK is pending, hold the task for it: bin/fm-captain-hold.sh hold $ID --reason '<what needs the OK>' - the held call is what keeps this finished task's idle endpoint from re-surfacing as stale until the captain decides." >&2
     return 1
   elif [ -n "$unpushed" ]; then
     branch=${TEARDOWN_WORKTREE_BRANCH_FOR_SAFETY:-}
